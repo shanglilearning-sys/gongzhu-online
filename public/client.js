@@ -26,7 +26,8 @@ const newRoundButton = document.querySelector("#new-round-button");
 const copyLinkButton = document.querySelector("#copy-link");
 const historyButton = document.querySelector("#history-button");
 const rulesButton = document.querySelector("#rules-button");
-const voiceButton = document.querySelector("#voice-button");
+const speakerButton = document.querySelector("#speaker-button");
+const micButton = document.querySelector("#mic-button");
 const scoreStrip = document.querySelector("#score-strip");
 const trickArea = document.querySelector("#trick-area");
 const statusLine = document.querySelector("#status-line");
@@ -47,10 +48,12 @@ const chatInput = document.querySelector("#chat-input");
 const voiceStatus = document.querySelector("#voice-status");
 
 let localVoiceStream = null;
-let voiceEnabled = false;
+let speakerEnabled = false;
+let micEnabled = false;
 const peerConnections = new Map();
 const remoteAudio = new Map();
 const remoteVoiceStates = new Map();
+const pendingIceCandidates = new Map();
 
 const params = new URLSearchParams(window.location.search);
 if (params.get("room")) {
@@ -133,9 +136,14 @@ chatForm.addEventListener("submit", (event) => {
   });
 });
 
-voiceButton.addEventListener("click", () => {
-  if (voiceEnabled) stopVoice();
-  else startVoice();
+speakerButton.addEventListener("click", () => {
+  if (speakerEnabled) stopSpeaker();
+  else startSpeaker();
+});
+
+micButton.addEventListener("click", () => {
+  if (micEnabled) stopMic();
+  else startMic();
 });
 
 socket.on("state", (nextState) => {
@@ -157,8 +165,12 @@ socket.on("voiceSignal", async ({ fromId, signal }) => {
   await handleVoiceSignal(fromId, signal);
 });
 
-socket.on("voiceState", ({ socketId, enabled }) => {
-  remoteVoiceStates.set(socketId, Boolean(enabled));
+socket.on("voiceState", ({ socketId, enabled, speakerEnabled: remoteSpeakerEnabled, micEnabled: remoteMicEnabled }) => {
+  remoteVoiceStates.set(socketId, {
+    speakerEnabled: remoteSpeakerEnabled ?? Boolean(enabled),
+    micEnabled: remoteMicEnabled ?? Boolean(enabled)
+  });
+  syncVoicePeers();
   updateVoiceStatus();
 });
 
@@ -491,16 +503,39 @@ function openRules() {
       <div><strong>跟牌</strong><span>必须跟首出花色，没有该花色时可以垫任意牌。</span></div>
       <div><strong>分牌</strong><span>猪 -100，羊 +100，红桃 5-A 为负分，变压器单收 +50。</span></div>
       <div><strong>全红</strong><span>收齐全部红桃转为 +200；红桃 A 被卖后为 +400。</span></div>
-      <div><strong>聊天语音</strong><span>房间内支持文字聊天和语音。语音需允许浏览器麦克风权限。</span></div>
+      <div><strong>聊天语音</strong><span>先开听筒才能听别人，开麦克风才会把自己的声音发出去。手机端首次开启听筒用于解锁播放。</span></div>
       <div><strong>嘉铭赞助</strong><span>本桌由嘉铭冠名赞助，输赢各凭牌技。</span></div>
     </div>
   `;
   openModal();
 }
 
-async function startVoice() {
+async function startSpeaker() {
+  speakerEnabled = true;
+  speakerButton.textContent = "关闭听筒";
+  speakerButton.classList.add("voice-on");
+  unlockRemoteAudio();
+  socket.emit("voiceState", { speakerEnabled: true });
+  await syncVoicePeers();
+  updateVoiceStatus();
+}
+
+function stopSpeaker() {
+  speakerEnabled = false;
+  speakerButton.textContent = "开启听筒";
+  speakerButton.classList.remove("voice-on");
+  socket.emit("voiceState", { speakerEnabled: false });
+  closeReceiveOnlyConnections();
+  for (const audio of remoteAudio.values()) {
+    audio.pause();
+    audio.srcObject = null;
+  }
+  updateVoiceStatus();
+}
+
+async function startMic() {
   if (!navigator.mediaDevices?.getUserMedia) {
-    statusLine.textContent = "当前浏览器不支持语音";
+    statusLine.textContent = "当前浏览器不支持麦克风";
     return;
   }
   try {
@@ -512,11 +547,12 @@ async function startVoice() {
       },
       video: false
     });
+    for (const track of localVoiceStream.getAudioTracks()) track.enabled = true;
     console.log("[voice] got local stream, tracks:", localVoiceStream.getAudioTracks().length);
-    voiceEnabled = true;
-    voiceButton.textContent = "关闭语音";
-    voiceButton.classList.add("voice-on");
-    socket.emit("voiceState", { enabled: true });
+    micEnabled = true;
+    micButton.textContent = "关闭麦克风";
+    micButton.classList.add("voice-on");
+    socket.emit("voiceState", { micEnabled: true });
     await syncVoicePeers();
     updateVoiceStatus();
   } catch (e) {
@@ -525,60 +561,83 @@ async function startVoice() {
   }
 }
 
-function stopVoice() {
-  voiceEnabled = false;
-  voiceButton.textContent = "开启语音";
-  voiceButton.classList.remove("voice-on");
-  socket.emit("voiceState", { enabled: false });
+function stopMic() {
+  micEnabled = false;
+  micButton.textContent = "开启麦克风";
+  micButton.classList.remove("voice-on");
+  socket.emit("voiceState", { micEnabled: false });
   if (localVoiceStream) {
     for (const track of localVoiceStream.getTracks()) track.stop();
   }
   localVoiceStream = null;
-  for (const [peerId, connection] of peerConnections) {
-    connection.close();
-    peerConnections.delete(peerId);
-  }
+  closeSendOnlyConnections();
+  syncVoicePeers();
   updateVoiceStatus();
 }
 
 async function syncVoicePeers() {
-  if (!voiceEnabled || !state?.players?.length) return;
-  const peers = state.players
-    .filter((player) => player.socketId && player.socketId !== socket.id && player.connected !== false)
-    .map((player) => player.socketId);
-  console.log("[voice] syncVoicePeers, peers:", peers, "existing connections:", [...peerConnections.keys()]);
-  for (const peerId of peers) {
-    if (!peerConnections.has(peerId)) {
-      console.log("[voice] initiating connection to", peerId);
-      await createPeerConnection(peerId, true);
+  if (!state?.players?.length) return;
+  const peers = state.players.filter((player) => player.socketId && player.socketId !== socket.id && player.connected !== false);
+  const desiredPeerIds = new Set();
+  for (const player of peers) {
+    const peerState = getVoiceStateForPlayer(player);
+    const shouldConnect = (speakerEnabled && peerState.micEnabled) || (micEnabled && peerState.speakerEnabled);
+    if (shouldConnect) {
+      desiredPeerIds.add(player.socketId);
+      if (!peerConnections.has(player.socketId)) {
+        const initiator = micEnabled && peerState.speakerEnabled;
+        console.log("[voice] creating desired connection to", player.socketId, "initiator:", initiator);
+        await createPeerConnection(player.socketId, initiator);
+      } else {
+        ensureLocalTracks(peerConnections.get(player.socketId));
+      }
     }
+  }
+
+  for (const peerId of [...peerConnections.keys()]) {
+    if (!desiredPeerIds.has(peerId)) closePeerConnection(peerId);
   }
 }
 
 async function handleVoiceSignal(fromId, signal) {
   if (!signal) return;
   console.log("[voice] signal from", fromId, "type:", signal.type);
-  if (signal.type === "offer") {
-    const existing = peerConnections.get(fromId);
-    if (existing && existing._initiator) {
-      console.log("[voice] closing stale initiator connection to", fromId);
-      existing.close();
-      peerConnections.delete(fromId);
-    }
+  const fromPlayer = state?.players?.find((player) => player.socketId === fromId);
+  const fromState = fromPlayer ? getVoiceStateForPlayer(fromPlayer) : remoteVoiceStates.get(fromId);
+  const shouldAccept = signal.type === "candidate"
+    || (speakerEnabled && fromState?.micEnabled)
+    || (micEnabled && fromState?.speakerEnabled);
+  if (!shouldAccept) {
+    console.log("[voice] ignored signal; no matching speaker/mic state");
+    return;
   }
-  const connection = await createPeerConnection(fromId, false);
+
   try {
     if (signal.type === "offer") {
+      const existing = peerConnections.get(fromId);
+      if (existing && existing.signalingState !== "stable") {
+        closePeerConnection(fromId);
+      }
+      const connection = await createPeerConnection(fromId, false);
       await connection.setRemoteDescription(signal.description);
+      await flushPendingIce(fromId, connection);
       const answer = await connection.createAnswer();
       await connection.setLocalDescription(answer);
       console.log("[voice] sending answer to", fromId);
       sendVoiceSignal(fromId, { type: "answer", description: connection.localDescription });
     } else if (signal.type === "answer") {
+      const connection = peerConnections.get(fromId);
+      if (!connection) return;
       await connection.setRemoteDescription(signal.description);
+      await flushPendingIce(fromId, connection);
       console.log("[voice] set remote answer from", fromId);
     } else if (signal.type === "candidate" && signal.candidate) {
-      await connection.addIceCandidate(signal.candidate);
+      const connection = peerConnections.get(fromId);
+      if (connection?.remoteDescription) {
+        await connection.addIceCandidate(signal.candidate);
+      } else {
+        queuePendingIce(fromId, signal.candidate);
+      }
     }
   } catch (e) {
     console.error("[voice] signal error:", e);
@@ -588,14 +647,8 @@ async function handleVoiceSignal(fromId, signal) {
 async function createPeerConnection(peerId, initiator) {
   const existing = peerConnections.get(peerId);
   if (existing) {
-    if (initiator && existing._initiator) {
-      existing.close();
-      peerConnections.delete(peerId);
-    } else if (initiator) {
-      return existing;
-    } else {
-      return existing;
-    }
+    ensureLocalTracks(existing);
+    return existing;
   }
   const connection = new RTCPeerConnection({
     iceServers: [
@@ -619,11 +672,7 @@ async function createPeerConnection(peerId, initiator) {
   peerConnections.set(peerId, connection);
   console.log("[voice] created", initiator ? "initiator" : "answerer", "connection to", peerId);
 
-  if (localVoiceStream) {
-    for (const track of localVoiceStream.getAudioTracks()) {
-      connection.addTrack(track, localVoiceStream);
-    }
-  }
+  ensureLocalTracks(connection);
 
   connection.onicecandidate = (event) => {
     if (event.candidate) {
@@ -644,15 +693,20 @@ async function createPeerConnection(peerId, initiator) {
       console.log("[voice] created audio element for", peerId);
     }
     audio.srcObject = event.streams[0];
-    audio.play().catch(e => console.error("[voice] audio play failed:", e));
+    if (speakerEnabled) {
+      audio.play().catch((e) => {
+        console.error("[voice] audio play failed:", e);
+        statusLine.textContent = "听筒被浏览器拦截，请再点一次开启听筒";
+      });
+    }
   };
 
   connection.onconnectionstatechange = () => {
     console.log("[voice] connection state to", peerId, ":", connection.connectionState);
     if (["closed", "failed", "disconnected"].includes(connection.connectionState)) {
       peerConnections.delete(peerId);
-      remoteVoiceStates.delete(peerId);
       updateVoiceStatus();
+      if (connection.connectionState === "failed") setTimeout(syncVoicePeers, 800);
     }
   };
 
@@ -673,13 +727,83 @@ function sendVoiceSignal(targetId, signal) {
   });
 }
 
+function ensureLocalTracks(connection) {
+  const currentTracks = new Set(connection.getSenders().map((sender) => sender.track).filter(Boolean));
+  if (!micEnabled || !localVoiceStream) return;
+  for (const track of localVoiceStream.getAudioTracks()) {
+    if (!currentTracks.has(track)) connection.addTrack(track, localVoiceStream);
+  }
+}
+
+function closePeerConnection(peerId) {
+  const connection = peerConnections.get(peerId);
+  if (connection) connection.close();
+  peerConnections.delete(peerId);
+  pendingIceCandidates.delete(peerId);
+  const audio = remoteAudio.get(peerId);
+  if (audio) {
+    audio.pause();
+    audio.srcObject = null;
+    audio.remove();
+  }
+  remoteAudio.delete(peerId);
+}
+
+function closeReceiveOnlyConnections() {
+  for (const player of state?.players || []) {
+    if (player.socketId && getVoiceStateForPlayer(player).micEnabled && !micEnabled) {
+      closePeerConnection(player.socketId);
+    }
+  }
+}
+
+function closeSendOnlyConnections() {
+  for (const player of state?.players || []) {
+    if (player.socketId && getVoiceStateForPlayer(player).speakerEnabled && !speakerEnabled) {
+      closePeerConnection(player.socketId);
+    }
+  }
+}
+
+function queuePendingIce(peerId, candidate) {
+  if (!pendingIceCandidates.has(peerId)) pendingIceCandidates.set(peerId, []);
+  pendingIceCandidates.get(peerId).push(candidate);
+}
+
+async function flushPendingIce(peerId, connection) {
+  const candidates = pendingIceCandidates.get(peerId) || [];
+  pendingIceCandidates.delete(peerId);
+  for (const candidate of candidates) {
+    await connection.addIceCandidate(candidate);
+  }
+}
+
+function unlockRemoteAudio() {
+  for (const audio of remoteAudio.values()) {
+    audio.muted = false;
+    audio.play().catch(() => {});
+  }
+}
+
+function getVoiceStateForPlayer(player) {
+  if (!player) return { speakerEnabled: false, micEnabled: false };
+  if (player.socketId === socket.id) return { speakerEnabled, micEnabled };
+  const runtimeState = remoteVoiceStates.get(player.socketId);
+  return {
+    speakerEnabled: runtimeState?.speakerEnabled ?? Boolean(player.voiceSpeakerEnabled),
+    micEnabled: runtimeState?.micEnabled ?? Boolean(player.voiceMicEnabled)
+  };
+}
+
 function updateVoiceStatus() {
-  const activeNames = (state?.players || [])
-    .filter((player) => player.socketId === socket.id ? voiceEnabled : remoteVoiceStates.get(player.socketId))
+  const micNames = (state?.players || [])
+    .filter((player) => getVoiceStateForPlayer(player).micEnabled)
     .map((player) => player.name);
-  voiceStatus.textContent = voiceEnabled
-    ? `语音已开启${activeNames.length ? ` · ${activeNames.join("、")}` : ""}`
-    : "语音未开启";
+  const parts = [
+    speakerEnabled ? "听筒开" : "听筒关",
+    micEnabled ? "麦克风开" : "麦克风关"
+  ];
+  voiceStatus.textContent = `${parts.join(" · ")}${micNames.length ? ` · 正在说话：${micNames.join("、")}` : ""}`;
 }
 
 function openModal() {

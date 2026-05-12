@@ -94,6 +94,8 @@ function createGameServer() {
     const player = room.players.find((candidate) => candidate.socketId === socketId);
     if (player) {
       player.connected = false;
+      player.voiceSpeakerEnabled = false;
+      player.voiceMicEnabled = false;
       pushMessage(room, `${player.name} 断开连接。`);
     }
     room.spectators = room.spectators.filter((candidate) => candidate.socketId !== socketId);
@@ -259,13 +261,21 @@ function createGameServer() {
       }
     });
 
-    socket.on("voiceState", ({ enabled } = {}) => {
+    socket.on("voiceState", ({ speakerEnabled, micEnabled } = {}) => {
       const room = getRoomForSocket(socket);
       if (!room) return;
+      const participant = room.players.find((player) => player.socketId === socket.id)
+        || room.spectators.find((spectator) => spectator.socketId === socket.id);
+      if (participant) {
+        if (speakerEnabled !== undefined) participant.voiceSpeakerEnabled = Boolean(speakerEnabled);
+        if (micEnabled !== undefined) participant.voiceMicEnabled = Boolean(micEnabled);
+      }
       io.to(room.code).emit("voiceState", {
         socketId: socket.id,
-        enabled: Boolean(enabled)
+        speakerEnabled: Boolean(participant?.voiceSpeakerEnabled),
+        micEnabled: Boolean(participant?.voiceMicEnabled)
       });
+      emitRoom(room);
     });
 
     socket.on("disconnect", () => {
@@ -344,6 +354,8 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null) {
       socketId,
       name: cleanName,
       role: "spectator",
+      voiceSpeakerEnabled: false,
+      voiceMicEnabled: false,
       joinedAt: Date.now()
     };
     room.spectators.push(spectator);
@@ -358,6 +370,8 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null) {
     direction: DIRECTIONS[room.players.length],
     directionLabel: DIRECTION_LABELS[room.players.length],
     totalScore: 0,
+    voiceSpeakerEnabled: false,
+    voiceMicEnabled: false,
     connected: true
   };
   room.players.push(player);
@@ -378,6 +392,8 @@ function publicRoom(room) {
       direction: player.direction,
       directionLabel: player.directionLabel,
       connected: player.connected,
+      voiceSpeakerEnabled: player.voiceSpeakerEnabled,
+      voiceMicEnabled: player.voiceMicEnabled,
       totalScore: player.totalScore,
       handCount: room.round?.hands[player.seat]?.length ?? 0,
       collectedCount: room.round?.taken[player.seat]?.length ?? 0
