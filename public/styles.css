@@ -247,6 +247,16 @@ input:focus {
   transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
 }
 
+.score-card.inspectable,
+.player-slot.inspectable {
+  cursor: pointer;
+}
+
+.score-card.inspectable:hover,
+.player-slot.inspectable:hover {
+  border-color: rgba(224, 184, 90, 0.72);
+}
+
 .score-card.active {
   border-color: rgba(224, 184, 90, 0.95);
   background: linear-gradient(180deg, rgba(224, 184, 90, 0.22), rgba(255, 250, 240, 0.07));
@@ -290,6 +300,63 @@ input:focus {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.score-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(255, 238, 202, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.07);
+  padding: 11px 12px;
+}
+
+.score-detail-head span {
+  color: rgba(255, 250, 240, 0.72);
+  font-weight: 900;
+}
+
+.score-detail-head strong {
+  color: #f5d985;
+  font-size: 18px;
+}
+
+.score-card-group {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.score-card-group h3 {
+  margin: 0;
+  color: rgba(255, 250, 240, 0.9);
+  font-size: 15px;
+}
+
+.score-card-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.score-card-pill {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 7px;
+  border: 1px solid rgba(53, 42, 31, 0.18);
+  background: #fffaf0;
+  color: #171914;
+  padding: 7px 10px;
+  font-weight: 950;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
+}
+
+.score-card-pill.red {
+  color: #c22e3e;
 }
 
 .table-wrap {

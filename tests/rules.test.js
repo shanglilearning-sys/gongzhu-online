@@ -63,9 +63,9 @@ function testScoring() {
 
 function testRoomFlow() {
   const room = createRoom("a", "甲");
-  room.players.push({ socketId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", totalScore: 0, connected: true });
-  room.players.push({ socketId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", totalScore: 0, connected: true });
-  room.players.push({ socketId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", totalScore: 0, connected: true });
+  room.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", connected: true });
+  room.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", connected: true });
+  room.players.push({ socketId: "d", clientId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", connected: true });
 
   startRound(room);
   assert.equal(room.round.hands.length, 4);

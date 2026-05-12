@@ -7,9 +7,11 @@ const SUIT_SYMBOLS = { S: "♠", H: "♥", D: "♦", C: "♣" };
 const SUIT_NAMES = { S: "黑桃", H: "红桃", D: "方块", C: "梅花" };
 const SPECIAL_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
+const CLIENT_ID_KEY = "gongzhuClientId";
 
 let state = null;
 let selectedExpose = new Set();
+const clientId = getClientId();
 
 const entry = document.querySelector("#entry");
 const game = document.querySelector("#game");
@@ -50,6 +52,7 @@ const voiceStatus = document.querySelector("#voice-status");
 let localVoiceStream = null;
 let speakerEnabled = false;
 let micEnabled = false;
+let resumeInFlight = false;
 const peerConnections = new Map();
 const remoteAudio = new Map();
 const remoteVoiceStates = new Map();
@@ -64,7 +67,7 @@ nameInput.value = localStorage.getItem("gongzhuName") || "";
 
 createButton.addEventListener("click", () => {
   const name = getName();
-  socket.emit("createRoom", { name }, handleJoinResponse);
+  socket.emit("createRoom", { name, clientId }, handleJoinResponse);
 });
 
 joinForm.addEventListener("submit", (event) => {
@@ -74,7 +77,7 @@ joinForm.addEventListener("submit", (event) => {
     entryError.textContent = "请输入房间码，或者点击创建房间。";
     return;
   }
-  socket.emit("joinRoom", { code, name: getName() }, handleJoinResponse);
+  socket.emit("joinRoom", { code, name: getName(), clientId }, handleJoinResponse);
 });
 
 startButton.addEventListener("click", () => {
@@ -148,10 +151,22 @@ micButton.addEventListener("click", () => {
 
 socket.on("state", (nextState) => {
   state = nextState;
+  localStorage.setItem("gongzhuLastRoom", nextState.code);
   entry.classList.add("hidden");
   game.classList.remove("hidden");
   render();
   syncVoicePeers();
+});
+
+socket.on("connect", () => {
+  if (!state?.code || resumeInFlight) return;
+  resumeInFlight = true;
+  socket.emit("joinRoom", { code: state.code, name: getName(), clientId }, (response) => {
+    resumeInFlight = false;
+    if (!response?.ok) {
+      statusLine.textContent = response?.error || "重连房间失败，请刷新后重新加入";
+    }
+  });
 });
 
 socket.on("chatMessage", (chat) => {
@@ -178,6 +193,20 @@ function getName() {
   const name = nameInput.value.trim() || "玩家";
   localStorage.setItem("gongzhuName", name);
   return name;
+}
+
+function getClientId() {
+  try {
+    const existing = localStorage.getItem(CLIENT_ID_KEY);
+    if (existing) return existing;
+    const id = window.crypto?.randomUUID
+      ? window.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(CLIENT_ID_KEY, id);
+    return id;
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
 }
 
 function handleJoinResponse(response) {
@@ -252,13 +281,18 @@ function renderScores() {
     card.className = "score-card";
     if (state.round?.currentPlayer === seat) card.classList.add("active");
     if (state.me?.seat === seat) card.classList.add("me");
+    if (player) {
+      card.classList.add("inspectable");
+      card.title = "查看本轮分牌";
+      card.addEventListener("click", () => openScoreCards(seat));
+    }
     card.innerHTML = `
       <div class="name">
         <span class="seat-badge">${player?.directionLabel || seat + 1}</span>
         <span class="name-text">${escapeHtml(player?.name || `空位 ${seat + 1}`)}</span>
         <strong>${formatScore(currentScore)}</strong>
       </div>
-      <div class="meta">总分 ${formatScore(player?.totalScore || 0)} · 手牌 ${player?.handCount || 0}</div>
+      <div class="meta">${player ? `本轮分数 ${formatScore(currentScore)} · 手牌 ${player.handCount || 0}` : "等待加入"}</div>
     `;
     scoreStrip.appendChild(card);
   }
@@ -272,6 +306,16 @@ function renderSlots() {
     slot.classList.toggle("current", state.round?.currentPlayer === seat);
     slot.classList.toggle("me", state.me?.seat === seat);
     slot.classList.toggle("offline", player?.connected === false);
+    slot.classList.toggle("inspectable", Boolean(player));
+    slot.title = player ? "查看本轮分牌" : "";
+    slot.tabIndex = player ? 0 : -1;
+    slot.onclick = player ? () => openScoreCards(seat) : null;
+    slot.onkeydown = player ? (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openScoreCards(seat);
+      }
+    } : null;
     slot.innerHTML = `
       <div class="slot-top">
         <span class="slot-seat">${player?.directionLabel || ""}</span>
@@ -470,6 +514,38 @@ function roundSummary() {
   return scores
     .map((score, seat) => `${state.players[seat]?.name || seat + 1} ${formatScore(score)}`)
     .join(" / ");
+}
+
+function openScoreCards(seat) {
+  const player = state?.players?.[seat];
+  if (!player) return;
+  const cards = [...(player.scoreCards || [])].sort(compareCards);
+  const score = currentRoundScore(seat);
+  modalTitle.textContent = `${player.name} 的本轮分牌`;
+  modalBody.innerHTML = `
+    <div class="score-detail-head">
+      <span>${escapeHtml(player.directionLabel || "")}家</span>
+      <strong>本轮分数 ${formatScore(score)}</strong>
+    </div>
+    ${renderScoreCardGroup("血（红桃）", cards.filter((card) => card.suit === "H"))}
+    ${renderScoreCardGroup("猪", cards.filter((card) => card.id === "SQ"))}
+    ${renderScoreCardGroup("羊", cards.filter((card) => card.id === "DJ"))}
+    ${renderScoreCardGroup("变压器", cards.filter((card) => card.id === "C10"))}
+    ${cards.length ? "" : `<p class="empty-note">本轮还没有收到分牌。</p>`}
+  `;
+  openModal();
+}
+
+function renderScoreCardGroup(title, cards) {
+  if (!cards.length) return "";
+  return `
+    <section class="score-card-group">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="score-card-list">
+        ${cards.map((card) => `<span class="score-card-pill ${card.suit === "H" || card.suit === "D" ? "red" : "black"}">${escapeHtml(formatCardId(card.id))}</span>`).join("")}
+      </div>
+    </section>
+  `;
 }
 
 function openHistory() {

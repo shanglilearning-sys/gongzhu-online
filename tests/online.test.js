@@ -87,17 +87,18 @@ async function main() {
   const { server, io } = createGameServer();
   const port = await listen(server);
   const url = `http://127.0.0.1:${port}`;
+  const clientIds = ["client-a", "client-b", "client-c", "client-d"];
   const clients = Array.from({ length: 4 }, () => connectClient(url));
 
   try {
     await Promise.all(clients.map((client) => client.connected));
 
-    const { code } = await clients[0].emit("createRoom", { name: "甲" });
+    const { code } = await clients[0].emit("createRoom", { name: "甲", clientId: clientIds[0] });
     assert.match(code, /^[A-Z2-9]{4}$/);
 
-    await clients[1].emit("joinRoom", { code, name: "乙" });
-    await clients[2].emit("joinRoom", { code, name: "丙" });
-    await clients[3].emit("joinRoom", { code, name: "丁" });
+    await clients[1].emit("joinRoom", { code, name: "乙", clientId: clientIds[1] });
+    await clients[2].emit("joinRoom", { code, name: "丙", clientId: clientIds[2] });
+    await clients[3].emit("joinRoom", { code, name: "丁", clientId: clientIds[3] });
     await Promise.all(clients.map((client) => client.waitFor(
       (state) => state.players.length === 4,
       "four players"
@@ -115,6 +116,26 @@ async function main() {
       (state) => state.round?.phase === "expose" && state.hand.length === 13,
       "expose phase"
     )));
+
+    const reconnectSeat = clients[2].state.me.seat;
+    const reconnectHand = clients[2].state.hand.map((card) => card.id).sort();
+    clients[2].socket.disconnect();
+    await clients[0].waitFor(
+      (state) => state.players[reconnectSeat]?.connected === false,
+      "player disconnect"
+    );
+
+    const reconnectedClient = connectClient(url);
+    await reconnectedClient.connected;
+    await reconnectedClient.emit("joinRoom", { code, name: "丙", clientId: clientIds[2] });
+    await reconnectedClient.waitFor(
+      (state) => state.me?.seat === reconnectSeat
+        && state.players[reconnectSeat]?.connected === true
+        && state.hand.length === 13,
+      "player reconnect"
+    );
+    assert.deepEqual(reconnectedClient.state.hand.map((card) => card.id).sort(), reconnectHand);
+    clients[2] = reconnectedClient;
 
     for (const client of clients) {
       await client.emit("exposeCards", { cardIds: client.state.canExpose });
@@ -150,6 +171,11 @@ async function main() {
     assert.equal(clients[0].state.round.phase, "finished");
     assert.equal(clients[0].state.players.every((player) => player.handCount === 0), true);
     assert.equal(clients[0].state.round.finishedScores.length, 4);
+    assert.equal(clients[0].state.players.every((player) => player.totalScore === undefined), true);
+    const publicScoreCardIds = clients[0].state.players.flatMap((player) => player.scoreCards.map((card) => card.id));
+    for (const id of ["SQ", "DJ", "C10", "H5", "HA"]) {
+      assert.ok(publicScoreCardIds.includes(id), `score cards should include ${id}`);
+    }
     console.log("online ok");
   } finally {
     for (const client of clients) client.socket.disconnect();

@@ -13,6 +13,7 @@ const CARD_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const DIRECTIONS = ["south", "east", "north", "west"];
 const DIRECTION_LABELS = ["南", "东", "北", "西"];
 const SPECIAL_CARDS = ["SQ", "DJ", "C10", "HA"];
+const SCORING_CARD_IDS = new Set(["SQ", "DJ", "C10", "H5", "H6", "H7", "H8", "H9", "H10", "HJ", "HQ", "HK", "HA"]);
 const INSTANCE_ID = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
 function createGameServer() {
@@ -66,21 +67,23 @@ function createGameServer() {
     return code ? rooms.get(code) : null;
   }
 
-  function createRoom(hostSocketId, hostName) {
+  function createRoom(hostSocketId, hostName, hostClientId) {
     const code = makeRoomCode(rooms);
+    const clientId = normalizeClientId(hostClientId, hostSocketId);
     const room = {
       code,
       phase: "lobby",
       players: [],
       spectators: [],
       hostId: hostSocketId,
+      hostClientId: clientId,
       round: null,
       chats: [],
       messages: [],
       createdAt: Date.now()
     };
     rooms.set(code, room);
-    addPlayerToRoom(room, hostSocketId, hostName, socketRooms);
+    addPlayerToRoom(room, hostSocketId, hostName, socketRooms, clientId);
     return room;
   }
 
@@ -107,7 +110,10 @@ function createGameServer() {
         candidate.direction = DIRECTIONS[index];
         candidate.directionLabel = DIRECTION_LABELS[index];
       });
-      if (room.players.length > 0) room.hostId = room.players[0].socketId;
+      if (room.players.length > 0) {
+        room.hostId = room.players[0].socketId;
+        room.hostClientId = room.players[0].clientId;
+      }
     }
 
     if (room.players.length === 0 && room.spectators.length === 0) {
@@ -118,9 +124,9 @@ function createGameServer() {
   }
 
   io.on("connection", (socket) => {
-    socket.on("createRoom", ({ name } = {}, callback = () => {}) => {
+    socket.on("createRoom", ({ name, clientId } = {}, callback = () => {}) => {
       try {
-        const room = createRoom(socket.id, name);
+        const room = createRoom(socket.id, name, clientId);
         socket.join(room.code);
         pushMessage(room, `${room.players[0].name} 创建了房间。`);
         console.log(`[${INSTANCE_ID}] create room ${room.code} by ${room.players[0].name}`);
@@ -131,7 +137,7 @@ function createGameServer() {
       }
     });
 
-    socket.on("joinRoom", ({ code, name } = {}, callback = () => {}) => {
+    socket.on("joinRoom", ({ code, name, clientId } = {}, callback = () => {}) => {
       try {
         const room = rooms.get(String(code || "").trim().toUpperCase());
         if (!room) {
@@ -139,11 +145,12 @@ function createGameServer() {
           console.warn(`[${INSTANCE_ID}] join failed for ${code}; known rooms: ${knownRooms}`);
           throw new Error("没有找到这个房间。请确认所有人打开的是同一个 Render 地址；如果刚创建就找不到，通常是 Render 多实例或服务重启导致。");
         }
-        addPlayerToRoom(room, socket.id, name, socketRooms);
+        const participant = addPlayerToRoom(room, socket.id, name, socketRooms, clientId);
         socket.join(room.code);
         const joined = room.players.find((player) => player.socketId === socket.id);
-        pushMessage(room, `${joined?.name || name || "旁观者"} 加入了房间。`);
-        console.log(`[${INSTANCE_ID}] join room ${room.code} by ${joined?.name || name || "旁观者"}`);
+        const displayName = joined?.name || participant?.name || name || "旁观者";
+        pushMessage(room, `${displayName} 加入了房间。`);
+        console.log(`[${INSTANCE_ID}] join room ${room.code} by ${displayName}`);
         emitRoom(room);
         callback({ ok: true, code: room.code });
       } catch (error) {
@@ -324,34 +331,85 @@ function makeRoomCode(rooms) {
   throw new Error("Unable to create room code");
 }
 
-function createTestRoom(hostSocketId, hostName) {
+function createTestRoom(hostSocketId, hostName, hostClientId = hostSocketId) {
   const rooms = new Map();
   const socketRooms = new Map();
   const code = makeRoomCode(rooms);
+  const clientId = normalizeClientId(hostClientId, hostSocketId);
   const room = {
     code,
     phase: "lobby",
     players: [],
     spectators: [],
     hostId: hostSocketId,
+    hostClientId: clientId,
     round: null,
     messages: [],
     chats: [],
     createdAt: Date.now()
   };
   rooms.set(code, room);
-  addPlayerToRoom(room, hostSocketId, hostName, socketRooms);
+  addPlayerToRoom(room, hostSocketId, hostName, socketRooms, clientId);
   return room;
 }
 
-function addPlayerToRoom(room, socketId, name, socketRooms = null) {
+function normalizeClientId(clientId, fallback) {
+  const cleanId = String(clientId || "").trim().slice(0, 80);
+  return cleanId || `socket:${fallback}`;
+}
+
+function clearRoomSocket(room, socketRooms, socketId) {
+  if (!socketId) return;
+  socketRooms?.delete(socketId);
+  room.spectators = room.spectators.filter((spectator) => spectator.socketId !== socketId);
+}
+
+function reconnectParticipant(room, participant, socketId, name, socketRooms) {
+  const cleanName = String(name || participant.name || "玩家").trim().slice(0, 16) || "玩家";
+  const oldSocketId = participant.socketId;
+  if (participant.role === "spectator") {
+    socketRooms?.delete(oldSocketId);
+  } else {
+    clearRoomSocket(room, socketRooms, oldSocketId);
+  }
+  participant.socketId = socketId;
+  participant.name = cleanName;
+  participant.connected = true;
+  participant.voiceSpeakerEnabled = false;
+  participant.voiceMicEnabled = false;
+  socketRooms?.set(socketId, room.code);
+  if (room.hostClientId && participant.clientId === room.hostClientId) {
+    room.hostId = socketId;
+  }
+  return participant;
+}
+
+function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = socketId) {
   const cleanName = String(name || "玩家").trim().slice(0, 16) || "玩家";
+  const cleanClientId = normalizeClientId(clientId, socketId);
   const existing = room.players.find((player) => player.socketId === socketId);
-  if (existing) return existing;
+  if (existing) {
+    existing.clientId = existing.clientId || cleanClientId;
+    existing.connected = true;
+    existing.name = cleanName;
+    socketRooms?.set(socketId, room.code);
+    return existing;
+  }
+
+  const reconnectingPlayer = room.players.find((player) => player.clientId === cleanClientId);
+  if (reconnectingPlayer) {
+    return reconnectParticipant(room, reconnectingPlayer, socketId, cleanName, socketRooms);
+  }
+
+  const reconnectingSpectator = room.spectators.find((spectator) => spectator.clientId === cleanClientId);
+  if (reconnectingSpectator) {
+    return reconnectParticipant(room, reconnectingSpectator, socketId, cleanName, socketRooms);
+  }
 
   if (room.players.length >= 4 || room.phase !== "lobby") {
     const spectator = {
       socketId,
+      clientId: cleanClientId,
       name: cleanName,
       role: "spectator",
       voiceSpeakerEnabled: false,
@@ -365,11 +423,11 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null) {
 
   const player = {
     socketId,
+    clientId: cleanClientId,
     name: cleanName,
     seat: room.players.length,
     direction: DIRECTIONS[room.players.length],
     directionLabel: DIRECTION_LABELS[room.players.length],
-    totalScore: 0,
     voiceSpeakerEnabled: false,
     voiceMicEnabled: false,
     connected: true
@@ -394,9 +452,8 @@ function publicRoom(room) {
       connected: player.connected,
       voiceSpeakerEnabled: player.voiceSpeakerEnabled,
       voiceMicEnabled: player.voiceMicEnabled,
-      totalScore: player.totalScore,
       handCount: room.round?.hands[player.seat]?.length ?? 0,
-      collectedCount: room.round?.taken[player.seat]?.length ?? 0
+      scoreCards: room.round ? scoringCardsFor(room.round.taken[player.seat] || []) : []
     })),
     spectators: room.spectators.map((spectator) => ({
       socketId: spectator.socketId,
@@ -635,10 +692,13 @@ function finishRound(room) {
   round.scorePreview = scores;
   round.finishedScores = scores;
   round.phase = "finished";
-  room.players.forEach((player, seat) => {
-    player.totalScore += scores[seat];
-  });
   pushMessage(room, `本局结束：${scores.map((score, seat) => `${room.players[seat].name} ${formatScore(score)}`).join("，")}。`);
+}
+
+function scoringCardsFor(cards) {
+  return cards
+    .filter((card) => SCORING_CARD_IDS.has(card.id))
+    .sort((a, b) => cardSortValue(a) - cardSortValue(b));
 }
 
 function calculateScores(round) {
