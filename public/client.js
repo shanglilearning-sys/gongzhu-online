@@ -541,7 +541,7 @@ async function syncVoicePeers() {
     .filter((player) => player.socketId && player.socketId !== socket.id && player.connected !== false)
     .map((player) => player.socketId);
   for (const peerId of peers) {
-    if (!peerConnections.has(peerId) && socket.id < peerId) {
+    if (!peerConnections.has(peerId)) {
       await createPeerConnection(peerId, true);
     }
   }
@@ -549,7 +549,13 @@ async function syncVoicePeers() {
 
 async function handleVoiceSignal(fromId, signal) {
   if (!signal) return;
-  if (!voiceEnabled && signal.type !== "state") return;
+  if (signal.type === "offer") {
+    const existing = peerConnections.get(fromId);
+    if (existing && existing._initiator) {
+      existing.close();
+      peerConnections.delete(fromId);
+    }
+  }
   const connection = await createPeerConnection(fromId, false);
   if (signal.type === "offer") {
     await connection.setRemoteDescription(signal.description);
@@ -568,7 +574,17 @@ async function handleVoiceSignal(fromId, signal) {
 }
 
 async function createPeerConnection(peerId, initiator) {
-  if (peerConnections.has(peerId)) return peerConnections.get(peerId);
+  const existing = peerConnections.get(peerId);
+  if (existing) {
+    if (initiator && existing._initiator) {
+      existing.close();
+      peerConnections.delete(peerId);
+    } else if (initiator) {
+      return existing;
+    } else {
+      return existing;
+    }
+  }
   const connection = new RTCPeerConnection({
     iceServers: [
       { urls: "stun:stun.miwifi.com:3478" },
@@ -587,6 +603,7 @@ async function createPeerConnection(peerId, initiator) {
       }
     ]
   });
+  connection._initiator = initiator;
   peerConnections.set(peerId, connection);
 
   if (localVoiceStream) {
