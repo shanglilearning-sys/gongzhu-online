@@ -1,0 +1,18 @@
+{
+  "name": "gongzhu-online",
+  "version": "1.0.0",
+  "description": "嘉铭赞助版四人联机拱猪纸牌游戏",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node tests/rules.test.js && node tests/online.test.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
+  }
+}

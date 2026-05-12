@@ -1,0 +1,84 @@
+const assert = require("node:assert/strict");
+const {
+  calculateScores,
+  getLegalCardIds,
+  startRound,
+  playCard,
+  createRoom,
+  finishExpose
+} = require("../server");
+
+function card(id) {
+  return { suit: id[0], rank: id.slice(1), id };
+}
+
+function roundWithTaken(taken, exposed = {}) {
+  return {
+    taken,
+    exposed: {
+      SQ: exposed.SQ ?? null,
+      DJ: exposed.DJ ?? null,
+      C10: exposed.C10 ?? null,
+      HA: exposed.HA ?? null
+    }
+  };
+}
+
+function testScoring() {
+  assert.deepEqual(calculateScores(roundWithTaken([
+    [card("SQ")],
+    [card("DJ")],
+    [card("C10")],
+    [card("H5"), card("HJ"), card("HA")]
+  ])), [-100, 100, 50, -80]);
+
+  assert.equal(calculateScores(roundWithTaken([
+    [card("SQ"), card("C10")],
+    [],
+    [],
+    []
+  ]))[0], -200);
+
+  assert.equal(calculateScores(roundWithTaken([
+    [card("SQ"), card("C10")],
+    [],
+    [],
+    []
+  ], { SQ: 0, C10: 0 }))[0], -800);
+
+  assert.equal(calculateScores(roundWithTaken([
+    ["H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10", "HJ", "HQ", "HK", "HA"].map(card),
+    [],
+    [],
+    []
+  ]))[0], 200);
+
+  assert.equal(calculateScores(roundWithTaken([
+    ["H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10", "HJ", "HQ", "HK", "HA", "SQ", "DJ", "C10"].map(card),
+    [],
+    [],
+    []
+  ], { SQ: 0, DJ: 0, C10: 0, HA: 0 }))[0], 3200);
+}
+
+function testRoomFlow() {
+  const room = createRoom("a", "甲");
+  room.players.push({ socketId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", totalScore: 0, connected: true });
+  room.players.push({ socketId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", totalScore: 0, connected: true });
+  room.players.push({ socketId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", totalScore: 0, connected: true });
+
+  startRound(room);
+  assert.equal(room.round.hands.length, 4);
+  assert.equal(room.round.hands.every((hand) => hand.length === 13), true);
+  assert.equal(room.round.phase, "expose");
+
+  finishExpose(room);
+  const starter = room.round.starter;
+  assert.deepEqual(getLegalCardIds(room.round, starter), ["S2"]);
+  playCard(room, starter, "S2");
+  assert.equal(room.round.trick.length, 1);
+}
+
+testScoring();
+testRoomFlow();
+console.log("rules ok");
