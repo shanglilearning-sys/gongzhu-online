@@ -150,6 +150,7 @@ socket.on("chatMessage", (chat) => {
 });
 
 socket.on("voiceSignal", async ({ fromId, signal }) => {
+  console.log("[voice] received voiceSignal from", fromId, "type:", signal?.type);
   await handleVoiceSignal(fromId, signal);
 });
 
@@ -508,13 +509,15 @@ async function startVoice() {
       },
       video: false
     });
+    console.log("[voice] got local stream, tracks:", localVoiceStream.getAudioTracks().length);
     voiceEnabled = true;
     voiceButton.textContent = "关闭语音";
     voiceButton.classList.add("voice-on");
     socket.emit("voiceState", { enabled: true });
     await syncVoicePeers();
     updateVoiceStatus();
-  } catch {
+  } catch (e) {
+    console.error("[voice] getUserMedia failed:", e);
     statusLine.textContent = "无法开启麦克风，请检查浏览器权限";
   }
 }
@@ -540,8 +543,10 @@ async function syncVoicePeers() {
   const peers = state.players
     .filter((player) => player.socketId && player.socketId !== socket.id && player.connected !== false)
     .map((player) => player.socketId);
+  console.log("[voice] syncVoicePeers, peers:", peers, "existing connections:", [...peerConnections.keys()]);
   for (const peerId of peers) {
     if (!peerConnections.has(peerId)) {
+      console.log("[voice] initiating connection to", peerId);
       await createPeerConnection(peerId, true);
     }
   }
@@ -549,27 +554,31 @@ async function syncVoicePeers() {
 
 async function handleVoiceSignal(fromId, signal) {
   if (!signal) return;
+  console.log("[voice] signal from", fromId, "type:", signal.type);
   if (signal.type === "offer") {
     const existing = peerConnections.get(fromId);
     if (existing && existing._initiator) {
+      console.log("[voice] closing stale initiator connection to", fromId);
       existing.close();
       peerConnections.delete(fromId);
     }
   }
   const connection = await createPeerConnection(fromId, false);
-  if (signal.type === "offer") {
-    await connection.setRemoteDescription(signal.description);
-    const answer = await connection.createAnswer();
-    await connection.setLocalDescription(answer);
-    sendVoiceSignal(fromId, { type: "answer", description: connection.localDescription });
-  } else if (signal.type === "answer") {
-    await connection.setRemoteDescription(signal.description);
-  } else if (signal.type === "candidate" && signal.candidate) {
-    try {
+  try {
+    if (signal.type === "offer") {
+      await connection.setRemoteDescription(signal.description);
+      const answer = await connection.createAnswer();
+      await connection.setLocalDescription(answer);
+      console.log("[voice] sending answer to", fromId);
+      sendVoiceSignal(fromId, { type: "answer", description: connection.localDescription });
+    } else if (signal.type === "answer") {
+      await connection.setRemoteDescription(signal.description);
+      console.log("[voice] set remote answer from", fromId);
+    } else if (signal.type === "candidate" && signal.candidate) {
       await connection.addIceCandidate(signal.candidate);
-    } catch {
-      // ICE candidates can arrive after a peer has already closed voice.
     }
+  } catch (e) {
+    console.error("[voice] signal error:", e);
   }
 }
 
@@ -605,6 +614,7 @@ async function createPeerConnection(peerId, initiator) {
   });
   connection._initiator = initiator;
   peerConnections.set(peerId, connection);
+  console.log("[voice] created", initiator ? "initiator" : "answerer", "connection to", peerId);
 
   if (localVoiceStream) {
     for (const track of localVoiceStream.getAudioTracks()) {
@@ -619,18 +629,23 @@ async function createPeerConnection(peerId, initiator) {
   };
 
   connection.ontrack = (event) => {
+    console.log("[voice] ontrack from", peerId, "streams:", event.streams.length, "tracks:", event.streams[0]?.getAudioTracks().length);
     let audio = remoteAudio.get(peerId);
     if (!audio) {
       audio = document.createElement("audio");
       audio.autoplay = true;
       audio.playsInline = true;
+      audio.volume = 1.0;
       document.body.appendChild(audio);
       remoteAudio.set(peerId, audio);
+      console.log("[voice] created audio element for", peerId);
     }
     audio.srcObject = event.streams[0];
+    audio.play().catch(e => console.error("[voice] audio play failed:", e));
   };
 
   connection.onconnectionstatechange = () => {
+    console.log("[voice] connection state to", peerId, ":", connection.connectionState);
     if (["closed", "failed", "disconnected"].includes(connection.connectionState)) {
       peerConnections.delete(peerId);
       remoteVoiceStates.delete(peerId);
