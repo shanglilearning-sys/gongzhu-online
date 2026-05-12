@@ -570,7 +570,22 @@ async function handleVoiceSignal(fromId, signal) {
 async function createPeerConnection(peerId, initiator) {
   if (peerConnections.has(peerId)) return peerConnections.get(peerId);
   const connection = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    iceServers: [
+      { urls: "stun:stun.miwifi.com:3478" },
+      { urls: "stun:stun.chat.bilibili.com:3478" },
+      { urls: "stun:stun.hitv.com:3478" },
+      { urls: "stun:stun.cdnbye.com:3478" },
+      {
+        urls: "turn:openrelay.metered.ca:80",
+        username: "openrelayproject",
+        credential: "openrelayproject"
+      },
+      {
+        urls: "turn:openrelay.metered.ca:443",
+        username: "openrelayproject",
+        credential: "openrelayproject"
+      }
+    ]
   });
   peerConnections.set(peerId, connection);
 
