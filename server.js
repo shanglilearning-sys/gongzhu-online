@@ -13,6 +13,7 @@ const CARD_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const DIRECTIONS = ["south", "east", "north", "west"];
 const DIRECTION_LABELS = ["南", "东", "北", "西"];
 const SPECIAL_CARDS = ["SQ", "DJ", "C10", "HA"];
+const INSTANCE_ID = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
 function createGameServer() {
   const app = express();
@@ -24,6 +25,32 @@ function createGameServer() {
   const socketRooms = new Map();
 
   app.use(express.static("public"));
+
+  app.get("/health", (request, response) => {
+    response.json({
+      ok: true,
+      instanceId: INSTANCE_ID,
+      uptime: Math.round(process.uptime()),
+      rooms: rooms.size
+    });
+  });
+
+  app.get("/debug/rooms", (request, response) => {
+    response.json({
+      instanceId: INSTANCE_ID,
+      rooms: [...rooms.values()].map((room) => ({
+        code: room.code,
+        phase: room.phase,
+        players: room.players.map((player) => ({
+          name: player.name,
+          seat: player.seat,
+          connected: player.connected
+        })),
+        spectators: room.spectators.length,
+        createdAt: room.createdAt
+      }))
+    });
+  });
 
   function emitRoom(room) {
     for (const player of room.players) {
@@ -94,6 +121,7 @@ function createGameServer() {
         const room = createRoom(socket.id, name);
         socket.join(room.code);
         pushMessage(room, `${room.players[0].name} 创建了房间。`);
+        console.log(`[${INSTANCE_ID}] create room ${room.code} by ${room.players[0].name}`);
         emitRoom(room);
         callback({ ok: true, code: room.code });
       } catch (error) {
@@ -104,11 +132,16 @@ function createGameServer() {
     socket.on("joinRoom", ({ code, name } = {}, callback = () => {}) => {
       try {
         const room = rooms.get(String(code || "").trim().toUpperCase());
-        if (!room) throw new Error("没有找到这个房间");
+        if (!room) {
+          const knownRooms = [...rooms.keys()].join(", ") || "none";
+          console.warn(`[${INSTANCE_ID}] join failed for ${code}; known rooms: ${knownRooms}`);
+          throw new Error("没有找到这个房间。请确认所有人打开的是同一个 Render 地址；如果刚创建就找不到，通常是 Render 多实例或服务重启导致。");
+        }
         addPlayerToRoom(room, socket.id, name, socketRooms);
         socket.join(room.code);
         const joined = room.players.find((player) => player.socketId === socket.id);
         pushMessage(room, `${joined?.name || name || "旁观者"} 加入了房间。`);
+        console.log(`[${INSTANCE_ID}] join room ${room.code} by ${joined?.name || name || "旁观者"}`);
         emitRoom(room);
         callback({ ok: true, code: room.code });
       } catch (error) {
@@ -337,6 +370,7 @@ function publicRoom(room) {
     code: room.code,
     phase: room.phase,
     hostId: room.hostId,
+    instanceId: INSTANCE_ID,
     players: room.players.map((player) => ({
       socketId: player.socketId,
       name: player.name,

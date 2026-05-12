@@ -1,4 +1,7 @@
-const socket = io();
+const socket = io({
+  transports: ["websocket"],
+  upgrade: false
+});
 
 const SUIT_SYMBOLS = { S: "♠", H: "♥", D: "♦", C: "♣" };
 const SUIT_NAMES = { S: "黑桃", H: "红桃", D: "方块", C: "梅花" };
