@@ -396,6 +396,57 @@ input:focus {
   pointer-events: none;
 }
 
+.table-exposed-badge {
+  position: absolute;
+  z-index: 4;
+  right: 16px;
+  bottom: 16px;
+  max-width: min(260px, calc(100% - 32px));
+  border: 1px solid rgba(224, 184, 90, 0.42);
+  border-radius: 8px;
+  background: rgba(5, 19, 13, 0.78);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
+  padding: 9px 10px;
+  color: #fffaf0;
+  animation: badgeIn 220ms ease both;
+}
+
+.badge-title {
+  margin-bottom: 7px;
+  color: #f5d985;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.badge-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.badge-list span {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  background: rgba(255, 250, 240, 0.12);
+  padding: 5px 8px;
+  color: rgba(255, 250, 240, 0.9);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.badge-list em {
+  max-width: 70px;
+  overflow: hidden;
+  color: rgba(255, 250, 240, 0.62);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .table {
   position: absolute;
   z-index: 2;
@@ -417,7 +468,7 @@ input:focus {
 .played-card {
   position: absolute;
   transform: translate(-50%, -50%);
-  animation: trickPop 260ms cubic-bezier(0.2, 0.9, 0.28, 1.2);
+  animation: trickPop 320ms cubic-bezier(0.2, 0.9, 0.28, 1.2);
 }
 
 .played-card[data-pos="0"] {
@@ -461,6 +512,10 @@ input:focus {
   border-color: rgba(224, 184, 90, 0.9);
   background: rgba(104, 77, 24, 0.62);
   animation: softPulse 1.2s ease-in-out infinite;
+}
+
+.game-screen[data-phase="play"] .trick-area:has(.played-card:nth-child(4)) .played-card {
+  animation-duration: 420ms;
 }
 
 .last-trick {
@@ -985,11 +1040,22 @@ input:focus {
 @keyframes trickPop {
   from {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.72) rotate(-4deg);
+    transform: translate(-50%, -68%) scale(0.72) rotate(-4deg);
   }
   to {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1) rotate(0deg);
+  }
+}
+
+@keyframes badgeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
 

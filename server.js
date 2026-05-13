@@ -14,9 +14,10 @@ const DIRECTIONS = ["south", "east", "north", "west"];
 const DIRECTION_LABELS = ["南", "东", "北", "西"];
 const SPECIAL_CARDS = ["SQ", "DJ", "C10", "HA"];
 const SCORING_CARD_IDS = new Set(["SQ", "DJ", "C10", "H5", "H6", "H7", "H8", "H9", "H10", "HJ", "HQ", "HK", "HA"]);
+const DEFAULT_TRICK_SETTLE_DELAY_MS = Number.parseInt(process.env.TRICK_SETTLE_DELAY_MS || "1000", 10);
 const INSTANCE_ID = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
-function createGameServer() {
+function createGameServer(options = {}) {
   const app = express();
   const server = http.createServer(app);
   const io = new Server(server, {
@@ -24,6 +25,9 @@ function createGameServer() {
   });
   const rooms = new Map();
   const socketRooms = new Map();
+  const trickSettleDelayMs = Number.isFinite(options.trickSettleDelayMs)
+    ? options.trickSettleDelayMs
+    : DEFAULT_TRICK_SETTLE_DELAY_MS;
 
   app.use(express.static("public"));
 
@@ -117,10 +121,30 @@ function createGameServer() {
     }
 
     if (room.players.length === 0 && room.spectators.length === 0) {
+      clearPendingTrickTimer(room);
       rooms.delete(code);
     } else {
       emitRoom(room);
     }
+  }
+
+  function clearPendingTrickTimer(room) {
+    if (room?.trickTimer) {
+      clearTimeout(room.trickTimer);
+      room.trickTimer = null;
+    }
+  }
+
+  function schedulePendingTrick(room) {
+    const pending = room.round?.pendingTrickResolution;
+    if (!pending || room.trickTimer) return;
+    const delay = Math.max(0, pending.resolveAt - Date.now());
+    room.trickTimer = setTimeout(() => {
+      room.trickTimer = null;
+      if (!room.round?.pendingTrickResolution || room.round.trick.length !== 4) return;
+      finishTrick(room);
+      emitRoom(room);
+    }, delay);
   }
 
   io.on("connection", (socket) => {
@@ -205,7 +229,8 @@ function createGameServer() {
         const room = getRoomForSocket(socket);
         if (!room) throw new Error("请先进入房间");
         const player = assertPlayer(socket, room);
-        playCard(room, player.seat, cardId);
+        playCard(room, player.seat, cardId, { settleDelayMs: trickSettleDelayMs });
+        schedulePendingTrick(room);
         emitRoom(room);
         callback({ ok: true });
       } catch (error) {
@@ -428,6 +453,7 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = so
     seat: room.players.length,
     direction: DIRECTIONS[room.players.length],
     directionLabel: DIRECTION_LABELS[room.players.length],
+    pigCount: 0,
     voiceSpeakerEnabled: false,
     voiceMicEnabled: false,
     connected: true
@@ -452,6 +478,7 @@ function publicRoom(room) {
       connected: player.connected,
       voiceSpeakerEnabled: player.voiceSpeakerEnabled,
       voiceMicEnabled: player.voiceMicEnabled,
+      pigCount: player.pigCount || 0,
       handCount: room.round?.hands[player.seat]?.length ?? 0,
       scoreCards: room.round ? scoringCardsFor(room.round.taken[player.seat] || []) : []
     })),
@@ -478,6 +505,8 @@ function publicRound(round) {
       card: play.card,
       exposed: play.exposed
     })),
+    settlingTrick: Boolean(round.pendingTrickResolution),
+    heartsSeen: Boolean(round.heartsSeen),
     exposed: round.exposed,
     protectedSuits: round.protectedSuits,
     trickNumber: round.trickNumber,
@@ -529,6 +558,9 @@ function startRound(room) {
   if (room.players.length !== 4) {
     throw new Error("需要 4 位玩家才能开始");
   }
+  room.players.forEach((player) => {
+    if (!Number.isFinite(player.pigCount)) player.pigCount = 0;
+  });
 
   const deck = shuffle(makeDeck());
   const hands = [[], [], [], []];
@@ -561,8 +593,10 @@ function startRound(room) {
     dealer: null,
     trickLeadSuit: null,
     trick: [],
+    pendingTrickResolution: null,
     trickNumber: 1,
     lastTrick: null,
+    heartsSeen: false,
     scorePreview: [0, 0, 0, 0],
     finishedScores: null
   };
@@ -600,7 +634,7 @@ function finishExpose(room) {
 }
 
 function getLegalCardIds(round, seat) {
-  if (!round || round.phase !== "play" || round.currentPlayer !== seat) return [];
+  if (!round || round.phase !== "play" || round.pendingTrickResolution || round.currentPlayer !== seat) return [];
   const hand = round.hands[seat];
   if (!round.trickLeadSuit) {
     return getLeadableCards(round, seat).map((card) => card.id);
@@ -619,10 +653,14 @@ function getLeadableCards(round, seat) {
     if (s2) return [s2];
   }
 
-  return hand.filter((card) => {
+  const protectedFiltered = hand.filter((card) => {
     const suitCount = hand.filter((candidate) => candidate.suit === card.suit).length;
     return !isProtectedExposedCard(round, card, suitCount);
   });
+  if (!isBloodLocked(round)) return protectedFiltered;
+
+  const nonHearts = protectedFiltered.filter((card) => card.suit !== "H");
+  return nonHearts.length ? nonHearts : protectedFiltered;
 }
 
 function isProtectedExposedCard(round, card, suitCount) {
@@ -631,9 +669,14 @@ function isProtectedExposedCard(round, card, suitCount) {
   return round.exposed[card.id] !== undefined && round.exposed[card.id] !== null;
 }
 
-function playCard(room, seat, cardId) {
+function isBloodLocked(round) {
+  return round.exposed?.HA !== null && round.exposed?.HA !== undefined && !round.heartsSeen;
+}
+
+function playCard(room, seat, cardId, options = {}) {
   const round = room.round;
   if (!round || round.phase !== "play") throw new Error("牌局尚未开始");
+  if (round.pendingTrickResolution) throw new Error("本墩正在结算，请稍等");
   if (round.currentPlayer !== seat) throw new Error("还没轮到你出牌");
 
   const legal = getLegalCardIds(round, seat);
@@ -645,10 +688,19 @@ function playCard(room, seat, cardId) {
   const exposed = isCardExposedBy(round, card.id, seat);
   if (!round.trickLeadSuit) round.trickLeadSuit = card.suit;
   round.trick.push({ seat, card, exposed });
+  if (card.suit === "H") round.heartsSeen = true;
   pushMessage(room, `${room.players[seat].name} 出了 ${formatCard(card)}。`);
 
   if (round.trick.length === 4) {
-    finishTrick(room);
+    const settleDelayMs = Math.max(0, Number(options.settleDelayMs || 0));
+    if (settleDelayMs > 0) {
+      round.pendingTrickResolution = {
+        resolveAt: Date.now() + settleDelayMs
+      };
+      round.currentPlayer = null;
+    } else {
+      finishTrick(room);
+    }
   } else {
     round.currentPlayer = (round.currentPlayer + 1) % 4;
   }
@@ -675,11 +727,13 @@ function finishTrick(room) {
   };
   pushMessage(room, `${room.players[winnerPlay.seat].name} 收下第 ${round.trickNumber} 墩。`);
 
+  round.pendingTrickResolution = null;
   round.currentPlayer = winnerPlay.seat;
   round.trickLeadSuit = null;
   round.trick = [];
   round.trickNumber += 1;
   round.protectedSuits[leadSuit] = false;
+  updateScorePreview(round);
 
   if (round.hands.every((hand) => hand.length === 0)) {
     finishRound(room);
@@ -692,6 +746,10 @@ function finishRound(room) {
   round.scorePreview = scores;
   round.finishedScores = scores;
   round.phase = "finished";
+  const pigSeat = round.taken.findIndex((cards) => cards.some((card) => card.id === "SQ"));
+  if (pigSeat >= 0) {
+    room.players[pigSeat].pigCount = (room.players[pigSeat].pigCount || 0) + 1;
+  }
   pushMessage(room, `本局结束：${scores.map((score, seat) => `${room.players[seat].name} ${formatScore(score)}`).join("，")}。`);
 }
 
@@ -831,6 +889,7 @@ module.exports = {
   playCard,
   exposeCards,
   finishExpose,
+  finishRound,
   createRoom: createTestRoom,
   createGameServer,
   addPlayerToRoom,

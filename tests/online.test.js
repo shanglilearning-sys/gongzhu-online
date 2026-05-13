@@ -84,7 +84,7 @@ function connectClient(url) {
 }
 
 async function main() {
-  const { server, io } = createGameServer();
+  const { server, io } = createGameServer({ trickSettleDelayMs: 80 });
   const port = await listen(server);
   const url = `http://127.0.0.1:${port}`;
   const clientIds = ["client-a", "client-b", "client-c", "client-d"];
@@ -147,8 +147,19 @@ async function main() {
       "play phase"
     )));
 
+    let sawSettlingTrick = false;
+
     let guard = 0;
     while (clients[0].state.round.phase !== "finished" && guard < 80) {
+      if (clients[0].state.round.settlingTrick) {
+        sawSettlingTrick = true;
+        assert.equal(clients[0].state.round.trick.length, 4);
+        await clients[0].waitFor(
+          (state) => state.round?.phase === "finished" || !state.round?.settlingTrick,
+          "trick settlement"
+        );
+        continue;
+      }
       const currentSeat = clients[0].state.round.currentPlayer;
       const currentClient = clients.find((client) => client.state.me?.seat === currentSeat);
       assert.ok(currentClient, `current client for seat ${currentSeat}`);
@@ -159,6 +170,10 @@ async function main() {
         `legal play for seat ${currentSeat}`
       );
       await currentClient.emit("playCard", { cardId: currentClient.state.legalPlays[0] });
+      if (clients[0].state.round?.settlingTrick) {
+        sawSettlingTrick = true;
+        assert.equal(clients[0].state.round.trick.length, 4);
+      }
       await clients[0].waitFor(
         (state) => state.round?.phase === "finished"
           || state.round?.currentPlayer !== currentSeat
@@ -169,8 +184,10 @@ async function main() {
     }
 
     assert.equal(clients[0].state.round.phase, "finished");
+    assert.equal(sawSettlingTrick, true);
     assert.equal(clients[0].state.players.every((player) => player.handCount === 0), true);
     assert.equal(clients[0].state.round.finishedScores.length, 4);
+    assert.equal(clients[0].state.players.reduce((sum, player) => sum + player.pigCount, 0), 1);
     assert.equal(clients[0].state.players.every((player) => player.totalScore === undefined), true);
     const publicScoreCardIds = clients[0].state.players.flatMap((player) => player.scoreCards.map((card) => card.id));
     for (const id of ["SQ", "DJ", "C10", "H5", "HA"]) {

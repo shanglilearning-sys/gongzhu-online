@@ -5,7 +5,9 @@ const {
   startRound,
   playCard,
   createRoom,
-  finishExpose
+  finishExpose,
+  exposeCards,
+  finishRound
 } = require("../server");
 
 function card(id) {
@@ -63,9 +65,9 @@ function testScoring() {
 
 function testRoomFlow() {
   const room = createRoom("a", "甲");
-  room.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", connected: true });
-  room.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", connected: true });
-  room.players.push({ socketId: "d", clientId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", connected: true });
+  room.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", pigCount: 0, connected: true });
+  room.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", pigCount: 0, connected: true });
+  room.players.push({ socketId: "d", clientId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", pigCount: 0, connected: true });
 
   startRound(room);
   assert.equal(room.round.hands.length, 4);
@@ -79,6 +81,84 @@ function testRoomFlow() {
   assert.equal(room.round.trick.length, 1);
 }
 
+function testBloodLock() {
+  const room = createRoom("a", "甲");
+  room.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", pigCount: 0, connected: true });
+  room.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", pigCount: 0, connected: true });
+  room.players.push({ socketId: "d", clientId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", pigCount: 0, connected: true });
+  room.phase = "playing";
+  room.round = {
+    handNumber: 1,
+    phase: "expose",
+    hands: [
+      [card("HA"), card("H5"), card("S2"), card("C3")],
+      [card("S3")],
+      [card("S4")],
+      [card("S5")]
+    ],
+    taken: [[], [], [], []],
+    exposed: { SQ: null, DJ: null, C10: null, HA: null },
+    protectedSuits: { S: false, H: false, D: false, C: false },
+    currentPlayer: 0,
+    starter: 0,
+    dealer: null,
+    trickLeadSuit: null,
+    trick: [],
+    pendingTrickResolution: null,
+    trickNumber: 2,
+    lastTrick: null,
+    heartsSeen: false,
+    scorePreview: [0, 0, 0, 0],
+    finishedScores: null
+  };
+
+  exposeCards(room, 0, ["HA"]);
+  finishExpose(room);
+  assert.deepEqual(getLegalCardIds(room.round, 0).sort(), ["C3", "S2"]);
+  assert.throws(() => playCard(room, 0, "H5"), /这张牌现在不能出/);
+
+  room.round.heartsSeen = true;
+  assert.ok(getLegalCardIds(room.round, 0).includes("H5"));
+
+  room.round.heartsSeen = false;
+  room.round.hands[0] = [card("H5"), card("H6")];
+  assert.deepEqual(getLegalCardIds(room.round, 0).sort(), ["H5", "H6"]);
+}
+
+function testPigCount() {
+  const room = createRoom("a", "甲");
+  room.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", pigCount: 0, connected: true });
+  room.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", pigCount: 0, connected: true });
+  room.players.push({ socketId: "d", clientId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", pigCount: 0, connected: true });
+  room.phase = "playing";
+  room.round = {
+    handNumber: 1,
+    phase: "play",
+    hands: [[], [], [], []],
+    taken: [[card("SQ")], [], [], []],
+    exposed: { SQ: null, DJ: null, C10: null, HA: null },
+    protectedSuits: { S: false, H: false, D: false, C: false },
+    currentPlayer: 0,
+    starter: 0,
+    dealer: null,
+    trickLeadSuit: null,
+    trick: [],
+    pendingTrickResolution: null,
+    trickNumber: 14,
+    lastTrick: null,
+    heartsSeen: true,
+    scorePreview: [0, 0, 0, 0],
+    finishedScores: null
+  };
+
+  const before = room.players[0].pigCount;
+  finishRound(room);
+  assert.equal(room.players[0].pigCount, before + 1);
+  assert.equal(room.round.phase, "finished");
+}
+
 testScoring();
 testRoomFlow();
+testBloodLock();
+testPigCount();
 console.log("rules ok");

@@ -34,6 +34,7 @@ const scoreStrip = document.querySelector("#score-strip");
 const trickArea = document.querySelector("#trick-area");
 const statusLine = document.querySelector("#status-line");
 const lastTrick = document.querySelector("#last-trick");
+const tableWrap = document.querySelector(".table-wrap");
 const handTitle = document.querySelector("#hand-title");
 const handEl = document.querySelector("#hand");
 const exposeButton = document.querySelector("#expose-button");
@@ -292,13 +293,14 @@ function renderScores() {
         <span class="name-text">${escapeHtml(player?.name || `空位 ${seat + 1}`)}</span>
         <strong>${formatScore(currentScore)}</strong>
       </div>
-      <div class="meta">${player ? `本轮分数 ${formatScore(currentScore)} · 手牌 ${player.handCount || 0}` : "等待加入"}</div>
+      <div class="meta">${player ? `本轮 ${formatScore(currentScore)} · 当猪 ${player.pigCount || 0} 局 · 手牌 ${player.handCount || 0}` : "等待加入"}</div>
     `;
     scoreStrip.appendChild(card);
   }
 }
 
 function renderSlots() {
+  renderTableExposedBadge();
   document.querySelectorAll(".player-slot").forEach((slot) => {
     const seat = Number(slot.dataset.seat);
     const player = state.players[seat];
@@ -321,10 +323,26 @@ function renderSlots() {
         <span class="slot-seat">${player?.directionLabel || ""}</span>
         <span class="slot-name">${escapeHtml(player?.name || "空位")}</span>
       </div>
-      <div class="slot-meta">${player ? `当前 ${formatScore(currentScore)} · 手牌 ${player.handCount}` : "等待加入"}</div>
+      <div class="slot-meta">${player ? `${formatScore(currentScore)} · 猪 ${player.pigCount || 0} · 手牌 ${player.handCount}` : "等待加入"}</div>
       ${player?.connected === false ? `<div class="slot-alert">断线</div>` : ""}
     `;
   });
+}
+
+function renderTableExposedBadge() {
+  if (!tableWrap) return;
+  tableWrap.querySelector(".table-exposed-badge")?.remove();
+  const items = getExposedItems();
+  if (!items.length) return;
+  const badge = document.createElement("div");
+  badge.className = "table-exposed-badge";
+  badge.innerHTML = `
+    <div class="badge-title">已卖</div>
+    <div class="badge-list">
+      ${items.map((item) => `<span>${escapeHtml(shortCardLabel(item.id))}<em>${escapeHtml(state.players[item.seat]?.name || "")}</em></span>`).join("")}
+    </div>
+  `;
+  tableWrap.appendChild(badge);
 }
 
 function renderTrick() {
@@ -340,7 +358,9 @@ function renderTrick() {
   }
 
   const phase = state.round?.phase;
-  if (phase === "play" && state.me?.seat === state.round?.currentPlayer) {
+  if (state.round?.settlingTrick) {
+    statusLine.textContent = "本墩结算中";
+  } else if (phase === "play" && state.me?.seat === state.round?.currentPlayer) {
     statusLine.textContent = "轮到你出牌";
   } else if (phase === "expose") {
     statusLine.textContent = "可选择手里的猪、羊、变压器或红桃 A 卖牌";
@@ -442,14 +462,10 @@ function renderChat() {
 
 function renderExposed() {
   exposedList.innerHTML = "";
-  const exposed = state.round?.exposed;
-  if (!exposed) {
+  const items = getExposedItems();
+  if (!state.round?.exposed) {
     exposedList.innerHTML = `<span class="pill">暂无</span>`;
     return;
-  }
-  const items = [];
-  for (const id of ["SQ", "DJ", "C10", "HA"]) {
-    if (exposed[id] !== null && exposed[id] !== undefined) items.push({ id, seat: exposed[id] });
   }
   if (!items.length) {
     exposedList.innerHTML = `<span class="pill">暂无</span>`;
@@ -461,6 +477,16 @@ function renderExposed() {
     pill.textContent = `${formatCardId(item.id)} · ${state.players[item.seat]?.name || ""}`;
     exposedList.appendChild(pill);
   }
+}
+
+function getExposedItems() {
+  const exposed = state?.round?.exposed;
+  if (!exposed) return [];
+  const items = [];
+  for (const id of ["SQ", "DJ", "C10", "HA"]) {
+    if (exposed[id] !== null && exposed[id] !== undefined) items.push({ id, seat: exposed[id] });
+  }
+  return items.sort((a, b) => compareCardIds(a.id, b.id));
 }
 
 function makeCard(card, options = {}) {
@@ -498,6 +524,10 @@ function formatCard(card) {
 
 function formatCardId(id) {
   return `${SUIT_NAMES[id[0]]}${id.slice(1)}${SPECIAL_NAMES[id] ? ` ${SPECIAL_NAMES[id]}` : ""}`;
+}
+
+function shortCardLabel(id) {
+  return SPECIAL_NAMES[id] || `${SUIT_SYMBOLS[id[0]]}${id.slice(1)}`;
 }
 
 function formatScore(score) {
