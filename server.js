@@ -1,6 +1,9 @@
 const express = require("express");
+const fs = require("node:fs/promises");
 const http = require("http");
+const path = require("node:path");
 const { Server } = require("socket.io");
+const Redis = require("ioredis");
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -16,18 +19,70 @@ const SPECIAL_CARDS = ["SQ", "DJ", "C10", "HA"];
 const SCORING_CARD_IDS = new Set(["SQ", "DJ", "C10", "H5", "H6", "H7", "H8", "H9", "H10", "HJ", "HQ", "HK", "HA"]);
 const DEFAULT_TRICK_SETTLE_DELAY_MS = Number.parseInt(process.env.TRICK_SETTLE_DELAY_MS || "1000", 10);
 const INSTANCE_ID = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+const ROOM_SNAPSHOT_VERSION = 1;
+const DEFAULT_ROOM_STATE_KEY = "gongzhu:rooms:v1";
 
 function createGameServer(options = {}) {
   const app = express();
   const server = http.createServer(app);
+  let isShuttingDown = false;
   const io = new Server(server, {
     cors: { origin: "*" }
   });
   const rooms = new Map();
   const socketRooms = new Map();
+  const persistence = resolveRoomPersistence(options.persistence);
+  const envSaveDebounceMs = Number.parseInt(process.env.ROOM_SAVE_DEBOUNCE_MS || "0", 10);
+  const saveDebounceMs = Number.isFinite(options.saveDebounceMs)
+    ? options.saveDebounceMs
+    : (Number.isFinite(envSaveDebounceMs) ? envSaveDebounceMs : 0);
+  let persistTimer = null;
+  let isReadySettled = false;
   const trickSettleDelayMs = Number.isFinite(options.trickSettleDelayMs)
     ? options.trickSettleDelayMs
     : DEFAULT_TRICK_SETTLE_DELAY_MS;
+
+  let persistQueue = Promise.resolve();
+  const persistRooms = () => {
+    if (!isReadySettled) return;
+    if (saveDebounceMs <= 0) {
+      flushRooms();
+      return;
+    }
+    clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      flushRooms();
+    }, saveDebounceMs);
+  };
+
+  const flushRooms = () => {
+    if (isShuttingDown) return persistQueue;
+    persistQueue = persistQueue
+      .catch(() => {})
+      .then(() => persistence.save(rooms));
+    persistQueue.catch((error) => {
+      console.warn(`[${INSTANCE_ID}] failed to persist rooms: ${error.message}`);
+    });
+    return persistQueue;
+  };
+
+  const ready = persistence.load()
+    .then((restoredRooms) => {
+      for (const room of restoredRooms) {
+        rooms.set(room.code, room);
+        schedulePendingTrick(room);
+      }
+      if (restoredRooms.length > 0) {
+        console.log(`[${INSTANCE_ID}] restored ${restoredRooms.length} room(s) from ${persistence.kind}`);
+      }
+    })
+    .catch((error) => {
+      console.warn(`[${INSTANCE_ID}] failed to restore rooms from ${persistence.kind}: ${error.message}`);
+    })
+    .finally(() => {
+      isReadySettled = true;
+    });
 
   app.use(express.static("public"));
 
@@ -36,7 +91,10 @@ function createGameServer(options = {}) {
       ok: true,
       instanceId: INSTANCE_ID,
       uptime: Math.round(process.uptime()),
-      rooms: rooms.size
+      rooms: rooms.size,
+      persistence: persistence.kind,
+      persistenceReady: persistence.isReady(),
+      restored: isReadySettled
     });
   });
 
@@ -52,6 +110,7 @@ function createGameServer(options = {}) {
           connected: player.connected
         })),
         spectators: room.spectators.length,
+        messages: room.messages.length,
         createdAt: room.createdAt
       }))
     });
@@ -59,9 +118,11 @@ function createGameServer(options = {}) {
 
   function emitRoom(room) {
     for (const player of room.players) {
+      if (!player.socketId) continue;
       io.to(player.socketId).emit("state", privateStateFor(room, player.socketId));
     }
     for (const spectator of room.spectators) {
+      if (!spectator.socketId) continue;
       io.to(spectator.socketId).emit("state", privateStateFor(room, spectator.socketId));
     }
   }
@@ -88,6 +149,7 @@ function createGameServer(options = {}) {
     };
     rooms.set(code, room);
     addPlayerToRoom(room, hostSocketId, hostName, socketRooms, clientId);
+    persistRooms();
     return room;
   }
 
@@ -123,8 +185,10 @@ function createGameServer(options = {}) {
     if (room.players.length === 0 && room.spectators.length === 0) {
       clearPendingTrickTimer(room);
       rooms.delete(code);
+      persistRooms();
     } else {
       emitRoom(room);
+      persistRooms();
     }
   }
 
@@ -135,17 +199,38 @@ function createGameServer(options = {}) {
     }
   }
 
+  function close() {
+    isShuttingDown = true;
+    clearTimeout(persistTimer);
+    persistTimer = null;
+    const pending = persistQueue
+      .catch(() => {})
+      .then(() => persistence.save(rooms))
+      .finally(() => {
+        persistence.close?.();
+      });
+    return pending;
+  }
+
   function schedulePendingTrick(room) {
     const pending = room.round?.pendingTrickResolution;
     if (!pending || room.trickTimer) return;
     const delay = Math.max(0, pending.resolveAt - Date.now());
     room.trickTimer = setTimeout(() => {
       room.trickTimer = null;
-      if (!room.round?.pendingTrickResolution || room.round.trick.length !== 4) return;
+      if (!room.round?.pendingTrickResolution || room.round.trick.length !== 4) {
+        persistRooms();
+        return;
+      }
       finishTrick(room);
       emitRoom(room);
+      persistRooms();
     }, delay);
   }
+
+  io.use((socket, next) => {
+    ready.then(() => next()).catch(next);
+  });
 
   io.on("connection", (socket) => {
     socket.on("createRoom", ({ name, clientId } = {}, callback = () => {}) => {
@@ -154,6 +239,7 @@ function createGameServer(options = {}) {
         socket.join(room.code);
         pushMessage(room, `${room.players[0].name} 创建了房间。`);
         console.log(`[${INSTANCE_ID}] create room ${room.code} by ${room.players[0].name}`);
+        persistRooms();
         emitRoom(room);
         callback({ ok: true, code: room.code });
       } catch (error) {
@@ -167,7 +253,10 @@ function createGameServer(options = {}) {
         if (!room) {
           const knownRooms = [...rooms.keys()].join(", ") || "none";
           console.warn(`[${INSTANCE_ID}] join failed for ${code}; known rooms: ${knownRooms}`);
-          throw new Error("没有找到这个房间。请确认所有人打开的是同一个 Render 地址；如果刚创建就找不到，通常是 Render 多实例或服务重启导致。");
+          const detail = persistence.kind === "memory"
+            ? "当前服务器没有启用持久化，服务重启或休眠后旧房间会丢失。"
+            : "当前持久化存储里也没有这个房间，可能是房间已结束或存储连接异常。";
+          throw new Error(`没有找到这个房间。${detail}请确认所有人打开的是同一个 Render 地址，必要时重新开房。`);
         }
         const participant = addPlayerToRoom(room, socket.id, name, socketRooms, clientId);
         socket.join(room.code);
@@ -175,6 +264,7 @@ function createGameServer(options = {}) {
         const displayName = joined?.name || participant?.name || name || "旁观者";
         pushMessage(room, `${displayName} 加入了房间。`);
         console.log(`[${INSTANCE_ID}] join room ${room.code} by ${displayName}`);
+        persistRooms();
         emitRoom(room);
         callback({ ok: true, code: room.code });
       } catch (error) {
@@ -188,6 +278,7 @@ function createGameServer(options = {}) {
         if (!room) throw new Error("请先进入房间");
         if (room.hostId !== socket.id) throw new Error("只有房主能开始");
         startRound(room);
+        persistRooms();
         emitRoom(room);
         callback({ ok: true });
       } catch (error) {
@@ -201,6 +292,7 @@ function createGameServer(options = {}) {
         if (!room) throw new Error("请先进入房间");
         const player = assertPlayer(socket, room);
         exposeCards(room, player.seat, cardIds);
+        persistRooms();
         emitRoom(room);
         callback({ ok: true });
       } catch (error) {
@@ -217,6 +309,7 @@ function createGameServer(options = {}) {
           throw new Error("房主或首出玩家可以结束卖牌");
         }
         finishExpose(room);
+        persistRooms();
         emitRoom(room);
         callback({ ok: true });
       } catch (error) {
@@ -231,6 +324,7 @@ function createGameServer(options = {}) {
         const player = assertPlayer(socket, room);
         playCard(room, player.seat, cardId, { settleDelayMs: trickSettleDelayMs });
         schedulePendingTrick(room);
+        persistRooms();
         emitRoom(room);
         callback({ ok: true });
       } catch (error) {
@@ -244,6 +338,7 @@ function createGameServer(options = {}) {
         if (!room) throw new Error("请先进入房间");
         if (room.hostId !== socket.id) throw new Error("只有房主能开新局");
         startRound(room);
+        persistRooms();
         emitRoom(room);
         callback({ ok: true });
       } catch (error) {
@@ -269,6 +364,7 @@ function createGameServer(options = {}) {
         };
         room.chats.push(chat);
         room.chats = room.chats.slice(-80);
+        persistRooms();
         io.to(room.code).emit("chatMessage", chat);
         callback({ ok: true });
       } catch (error) {
@@ -307,6 +403,7 @@ function createGameServer(options = {}) {
         speakerEnabled: Boolean(participant?.voiceSpeakerEnabled),
         micEnabled: Boolean(participant?.voiceMicEnabled)
       });
+      persistRooms();
       emitRoom(room);
     });
 
@@ -315,7 +412,315 @@ function createGameServer(options = {}) {
     });
   });
 
-  return { app, server, io, rooms, socketRooms, createRoom };
+  return { app, server, io, rooms, socketRooms, createRoom, ready, persistence, close };
+}
+
+function resolveRoomPersistence(config = {}) {
+  if (config && typeof config.load === "function" && typeof config.save === "function") {
+    return {
+      kind: config.kind || "custom",
+      isReady: typeof config.isReady === "function" ? config.isReady : () => true,
+      load: config.load,
+      save: config.save,
+      close: config.close
+    };
+  }
+  return createRoomPersistence(config);
+}
+
+function createRoomPersistence(config = {}) {
+  const redisUrl = config.redisUrl ?? process.env.REDIS_URL ?? process.env.RENDER_REDIS_URL;
+  const filePath = config.filePath ?? process.env.ROOMS_FILE;
+  const key = config.key || process.env.ROOMS_KEY || DEFAULT_ROOM_STATE_KEY;
+  if (config.disabled || (!redisUrl && !filePath)) {
+    return createNoopPersistence();
+  }
+  if (redisUrl) {
+    return createRedisPersistence(redisUrl, key);
+  }
+  return createFilePersistence(filePath);
+}
+
+function createNoopPersistence() {
+  return {
+    kind: "memory",
+    isReady: () => true,
+    load: async () => [],
+    save: async () => {}
+  };
+}
+
+function createRedisPersistence(redisUrl, key) {
+  let ready = false;
+  let readyWait = null;
+  const redis = new Redis(redisUrl, {
+    commandTimeout: 3000,
+    connectTimeout: 3000,
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 2,
+    retryStrategy(times) {
+      return Math.min(2000, times * 200);
+    }
+  });
+  redis.on("ready", () => {
+    ready = true;
+    console.log(`[${INSTANCE_ID}] room persistence connected to Redis`);
+  });
+  redis.on("end", () => {
+    ready = false;
+  });
+  redis.on("error", (error) => {
+    ready = false;
+    console.warn(`[${INSTANCE_ID}] Redis persistence error: ${error.message}`);
+  });
+
+  return {
+    kind: "redis",
+    isReady: () => ready,
+    async load() {
+      readyWait ||= new Promise((resolve) => {
+        if (ready) {
+          resolve();
+          return;
+        }
+        const timer = setTimeout(resolve, 3000);
+        redis.once("ready", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+      await readyWait;
+      const raw = await redis.get(key);
+      return parsePersistedRooms(raw);
+    },
+    async save(rooms) {
+      await redis.set(key, stringifyRooms(rooms));
+    },
+    close: () => redis.disconnect()
+  };
+}
+
+function createFilePersistence(filePath) {
+  let ready = false;
+  const resolved = path.resolve(filePath);
+  return {
+    kind: "file",
+    isReady: () => ready,
+    async load() {
+      try {
+        const raw = await fs.readFile(resolved, "utf8");
+        ready = true;
+        return parsePersistedRooms(raw);
+      } catch (error) {
+        if (error.code === "ENOENT") {
+          ready = true;
+          return [];
+        }
+        throw error;
+      }
+    },
+    async save(rooms) {
+      await fs.mkdir(path.dirname(resolved), { recursive: true });
+      const tmpPath = `${resolved}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+      await fs.writeFile(tmpPath, stringifyRooms(rooms), "utf8");
+      await fs.rename(tmpPath, resolved);
+      ready = true;
+    }
+  };
+}
+
+function stringifyRooms(rooms) {
+  const snapshot = {
+    version: ROOM_SNAPSHOT_VERSION,
+    savedAt: Date.now(),
+    rooms: [...rooms.values()].map(roomToSnapshot)
+  };
+  return JSON.stringify(snapshot);
+}
+
+function parsePersistedRooms(raw) {
+  if (!raw) return [];
+  const parsed = JSON.parse(raw);
+  if (parsed.version !== ROOM_SNAPSHOT_VERSION || !Array.isArray(parsed.rooms)) {
+    return [];
+  }
+  return parsed.rooms
+    .map(roomFromSnapshot)
+    .filter(Boolean);
+}
+
+function roomToSnapshot(room) {
+  const snapshot = {
+    code: room.code,
+    phase: room.phase,
+    players: room.players.map(participantToSnapshot),
+    spectators: room.spectators.map(participantToSnapshot),
+    hostClientId: room.hostClientId,
+    round: room.round ? roundToSnapshot(room.round) : null,
+    chats: room.chats || [],
+    messages: room.messages || [],
+    createdAt: room.createdAt
+  };
+  return snapshot;
+}
+
+function participantToSnapshot(participant) {
+  return {
+    clientId: participant.clientId,
+    name: participant.name,
+    role: participant.role,
+    seat: participant.seat,
+    direction: participant.direction,
+    directionLabel: participant.directionLabel,
+    pigCount: participant.pigCount || 0,
+    joinedAt: participant.joinedAt,
+    connected: false,
+    socketId: null,
+    voiceSpeakerEnabled: false,
+    voiceMicEnabled: false
+  };
+}
+
+function roundToSnapshot(round) {
+  const snapshot = { ...round };
+  snapshot.hands = round.hands.map((hand) => hand.map(cardSnapshot));
+  snapshot.taken = round.taken.map((pile) => pile.map(cardSnapshot));
+  snapshot.trick = round.trick.filter((play) => play?.card).map((play) => ({
+    seat: play.seat,
+    card: cardSnapshot(play.card),
+    exposed: Boolean(play.exposed)
+  }));
+  snapshot.lastTrick = round.lastTrick ? {
+    winner: round.lastTrick.winner,
+    winnerName: round.lastTrick.winnerName,
+    cards: round.lastTrick.cards.filter((play) => play?.card).map((play) => ({
+      seat: play.seat,
+      card: cardSnapshot(play.card),
+      exposed: Boolean(play.exposed)
+    }))
+  } : null;
+  return snapshot;
+}
+
+function cardSnapshot(card) {
+  return {
+    suit: card.suit,
+    rank: card.rank,
+    id: card.id
+  };
+}
+
+function roomFromSnapshot(snapshot) {
+  if (!snapshot?.code || !Array.isArray(snapshot.players)) return null;
+  const players = snapshot.players.slice(0, 4).map((player, index) => ({
+    socketId: null,
+    clientId: normalizeClientId(player.clientId, `restored-${snapshot.code}-${index}`),
+    name: String(player.name || "玩家").trim().slice(0, 16) || "玩家",
+    seat: index,
+    direction: DIRECTIONS[index],
+    directionLabel: DIRECTION_LABELS[index],
+    pigCount: Number.isFinite(player.pigCount) ? player.pigCount : 0,
+    voiceSpeakerEnabled: false,
+    voiceMicEnabled: false,
+    connected: false
+  }));
+  if (players.length === 0) return null;
+  const round = snapshot.round ? roundFromSnapshot(snapshot.round) : null;
+  if (round?.pendingTrickResolution) {
+    if (round.trick.length === 4) {
+      round.pendingTrickResolution.resolveAt = Math.min(round.pendingTrickResolution.resolveAt, Date.now());
+      round.currentPlayer = null;
+    } else {
+      round.pendingTrickResolution = null;
+    }
+  }
+  const hostClientId = snapshot.hostClientId || players[0].clientId;
+  return {
+    code: String(snapshot.code).trim().toUpperCase(),
+    phase: snapshot.phase || (round ? "playing" : "lobby"),
+    players,
+    spectators: Array.isArray(snapshot.spectators)
+      ? snapshot.spectators.map((spectator, index) => ({
+        socketId: null,
+        clientId: normalizeClientId(spectator.clientId, `restored-spectator-${snapshot.code}-${index}`),
+        name: String(spectator.name || "旁观者").trim().slice(0, 16) || "旁观者",
+        role: "spectator",
+        voiceSpeakerEnabled: false,
+        voiceMicEnabled: false,
+        joinedAt: spectator.joinedAt || Date.now()
+      }))
+      : [],
+    hostId: null,
+    hostClientId,
+    round,
+    chats: Array.isArray(snapshot.chats) ? snapshot.chats.slice(-80) : [],
+    messages: Array.isArray(snapshot.messages) ? snapshot.messages.slice(-50) : [],
+    createdAt: snapshot.createdAt || Date.now(),
+    trickTimer: null
+  };
+}
+
+function roundFromSnapshot(snapshot) {
+  const currentPlayer = Number.isFinite(snapshot.currentPlayer)
+    ? snapshot.currentPlayer
+    : null;
+  const exposed = {
+    SQ: snapshot.exposed?.SQ ?? null,
+    DJ: snapshot.exposed?.DJ ?? null,
+    C10: snapshot.exposed?.C10 ?? null,
+    HA: snapshot.exposed?.HA ?? null
+  };
+  const round = {
+    handNumber: snapshot.handNumber || 1,
+    phase: snapshot.phase || "play",
+    hands: normalizeCardMatrix(snapshot.hands),
+    taken: normalizeCardMatrix(snapshot.taken),
+    exposed,
+    protectedSuits: {
+      S: Boolean(snapshot.protectedSuits?.S),
+      H: Boolean(snapshot.protectedSuits?.H),
+      D: Boolean(snapshot.protectedSuits?.D),
+      C: Boolean(snapshot.protectedSuits?.C)
+    },
+    currentPlayer,
+    starter: Number.isFinite(snapshot.starter) ? snapshot.starter : null,
+    dealer: Number.isFinite(snapshot.dealer) ? snapshot.dealer : null,
+    trickLeadSuit: snapshot.trickLeadSuit || null,
+    trick: Array.isArray(snapshot.trick)
+      ? snapshot.trick.filter((play) => play?.card).map((play) => ({
+        seat: play.seat,
+        card: cardSnapshot(play.card),
+        exposed: Boolean(play.exposed)
+      }))
+      : [],
+    pendingTrickResolution: snapshot.pendingTrickResolution?.resolveAt
+      ? { resolveAt: snapshot.pendingTrickResolution.resolveAt }
+      : null,
+    trickNumber: snapshot.trickNumber || 1,
+    lastTrick: snapshot.lastTrick ? {
+      winner: snapshot.lastTrick.winner,
+      winnerName: snapshot.lastTrick.winnerName,
+      cards: Array.isArray(snapshot.lastTrick.cards)
+        ? snapshot.lastTrick.cards.filter((play) => play?.card).map((play) => ({
+          seat: play.seat,
+          card: cardSnapshot(play.card),
+          exposed: Boolean(play.exposed)
+        }))
+        : []
+    } : null,
+    heartsSeen: Boolean(snapshot.heartsSeen),
+    scorePreview: Array.isArray(snapshot.scorePreview) ? snapshot.scorePreview.slice(0, 4) : [0, 0, 0, 0],
+    finishedScores: Array.isArray(snapshot.finishedScores) ? snapshot.finishedScores.slice(0, 4) : null
+  };
+  while (round.hands.length < 4) round.hands.push([]);
+  while (round.taken.length < 4) round.taken.push([]);
+  updateScorePreview(round);
+  return round;
+}
+
+function normalizeCardMatrix(matrix) {
+  const rows = Array.isArray(matrix) ? matrix.slice(0, 4) : [];
+  return rows.map((cards) => Array.isArray(cards) ? cards.filter(Boolean).map(cardSnapshot) : []);
 }
 
 function makeDeck() {
@@ -875,9 +1280,14 @@ function assertPlayer(socket, room) {
 }
 
 if (require.main === module) {
-  const { server } = createGameServer();
-  server.listen(PORT, HOST, () => {
-    console.log(`拱猪服务器已启动：http://${HOST}:${PORT}`);
+  const { server, ready } = createGameServer();
+  ready.then(() => {
+    server.listen(PORT, HOST, () => {
+      console.log(`拱猪服务器已启动：http://${HOST}:${PORT}`);
+    });
+  }).catch((error) => {
+    console.error(`拱猪服务器启动失败：${error.message}`);
+    process.exit(1);
   });
 }
 
@@ -893,5 +1303,6 @@ module.exports = {
   createRoom: createTestRoom,
   createGameServer,
   addPlayerToRoom,
-  makeDeck
+  makeDeck,
+  createRoomPersistence
 };

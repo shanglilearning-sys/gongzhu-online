@@ -93,6 +93,34 @@ PORT=3001 npm start
 2. 局域网联机：启动服务后，让朋友访问 `http://你的局域网 IP:3000`。
 3. 公网远程：部署到 Render、Railway、Fly.io、VPS 等任意支持 Node.js WebSocket 的平台。启动命令为 `npm start`，端口使用平台提供的 `PORT` 环境变量。
 
+## 防止中途丢房间
+
+线上房间默认保存在 Node 进程内存里。Render 免费 Web Service 如果重启、重新部署或休眠，内存会被清空，旧房号就会提示“没有找到这个房间”。本项目支持把房间快照写到 Redis 兼容存储，推荐 Render Key Value。想要真正抗重启，Key Value 也要选带磁盘持久化的付费实例；Render 免费 Key Value 本身重启时也会丢数据。
+
+1. 在 Render Dashboard 里新建一个 Key Value，区域选择和 Web Service 相同。
+2. 打开 Key Value 的 Connect 菜单，复制 Internal URL。
+3. 打开游戏 Web Service 的 Environment，新增环境变量：
+
+   ```text
+   REDIS_URL=上一步复制的 Internal URL
+   ```
+
+4. 保存后 Render 会自动重新部署。部署完成后打开：
+
+   ```text
+   https://你的项目.onrender.com/health
+   ```
+
+   看到 `persistence` 为 `redis`，并且 `persistenceReady` 为 `true`，就表示房间快照已经启用。
+
+如果使用 VPS 或付费 Render Disk，也可以设置：
+
+```text
+ROOMS_FILE=/var/data/gongzhu-rooms.json
+```
+
+但 Render 免费 Web Service 的本地文件系统不是持久的，所以免费环境不要只依赖 `ROOMS_FILE`。
+
 ## 本版本采用的规则
 
 - 使用一副 52 张牌，四人每人 13 张。

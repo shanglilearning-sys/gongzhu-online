@@ -175,7 +175,7 @@ socket.on("connect", () => {
   socket.emit("joinRoom", { code: state.code, name: getName(), clientId }, (response) => {
     resumeInFlight = false;
     if (!response?.ok) {
-      statusLine.textContent = response?.error || "重连房间失败，请刷新后重新加入";
+      statusLine.textContent = roomErrorMessage(response?.error || "重连房间失败，请刷新后重新加入");
     }
   });
 });
@@ -239,13 +239,19 @@ function applyUiScale(value) {
 
 function handleJoinResponse(response) {
   if (!response?.ok) {
-    entryError.textContent = response?.error || "操作失败";
+    entryError.textContent = roomErrorMessage(response?.error || "操作失败");
     return;
   }
   entryError.textContent = "";
   if (response.code) {
     window.history.replaceState(null, "", `?room=${response.code}`);
   }
+}
+
+function roomErrorMessage(message) {
+  const text = String(message || "");
+  if (!text.includes("没有找到这个房间")) return text || "操作失败";
+  return `${text} 如果是游戏中途突然出现，多半是服务器刚重启过；请让房主确认 Render 是否重启，并检查 /health 里的 uptime 和 persistence。`;
 }
 
 function emitAction(event, payload, afterOk) {
