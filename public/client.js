@@ -8,6 +8,7 @@ const SUIT_NAMES = { S: "黑桃", H: "红桃", D: "方块", C: "梅花" };
 const SPECIAL_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
 const CLIENT_ID_KEY = "gongzhuClientId";
+const UI_SCALE_KEY = "gongzhuUiScale";
 
 let state = null;
 let selectedExpose = new Set();
@@ -30,6 +31,8 @@ const historyButton = document.querySelector("#history-button");
 const rulesButton = document.querySelector("#rules-button");
 const speakerButton = document.querySelector("#speaker-button");
 const micButton = document.querySelector("#mic-button");
+const uiScaleInput = document.querySelector("#ui-scale");
+const uiScaleValue = document.querySelector("#ui-scale-value");
 const scoreStrip = document.querySelector("#score-strip");
 const trickArea = document.querySelector("#trick-area");
 const statusLine = document.querySelector("#status-line");
@@ -65,6 +68,7 @@ if (params.get("room")) {
 }
 
 nameInput.value = localStorage.getItem("gongzhuName") || "";
+applyUiScale(getSavedUiScale());
 
 createButton.addEventListener("click", () => {
   const name = getName();
@@ -150,6 +154,12 @@ micButton.addEventListener("click", () => {
   else startMic();
 });
 
+uiScaleInput?.addEventListener("input", () => {
+  const value = clampScale(uiScaleInput.value);
+  localStorage.setItem(UI_SCALE_KEY, String(value));
+  applyUiScale(value);
+});
+
 socket.on("state", (nextState) => {
   state = nextState;
   localStorage.setItem("gongzhuLastRoom", nextState.code);
@@ -208,6 +218,23 @@ function getClientId() {
   } catch {
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   }
+}
+
+function getSavedUiScale() {
+  return clampScale(localStorage.getItem(UI_SCALE_KEY) || "100");
+}
+
+function clampScale(value) {
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isFinite(numeric)) return 100;
+  return Math.min(112, Math.max(82, numeric));
+}
+
+function applyUiScale(value) {
+  const scale = clampScale(value);
+  document.documentElement.style.setProperty("--ui-scale", String(scale / 100));
+  if (uiScaleInput) uiScaleInput.value = String(scale);
+  if (uiScaleValue) uiScaleValue.textContent = `${scale}%`;
 }
 
 function handleJoinResponse(response) {
