@@ -236,7 +236,7 @@ function activeScaleKey() {
 
 function scaleBounds() {
   return MOBILE_QUERY.matches
-    ? { min: 50, max: 100 }
+    ? { min: 50, max: 120 }
     : { min: 65, max: 120 };
 }
 
@@ -608,9 +608,9 @@ function slotPoint(index, count) {
   const yRadius = tableModeEnabled ? 43 : (index === 0 ? 37 : 39);
   const spread = mobileSeatSpread();
   const mobileSeatMaps = {
-    3: [{ x: 50, y: 86 }, { x: 72 + 11 * spread, y: 42 }, { x: 28 - 11 * spread, y: 42 }],
-    4: [{ x: 50, y: 86 }, { x: 72 + 11 * spread, y: 50 }, { x: 50, y: 15 }, { x: 28 - 11 * spread, y: 50 }],
-    5: [{ x: 50, y: 86 }, { x: 72 + 11 * spread, y: 64 }, { x: 70, y: 16 }, { x: 30, y: 16 }, { x: 28 - 11 * spread, y: 64 }]
+    3: [{ x: 50, y: 88 }, { x: 71 + 12 * spread, y: 40 }, { x: 29 - 12 * spread, y: 40 }],
+    4: [{ x: 50, y: 88 }, { x: 71 + 12 * spread, y: 50 }, { x: 50, y: 12 }, { x: 29 - 12 * spread, y: 50 }],
+    5: [{ x: 50, y: 88 }, { x: 71 + 12 * spread, y: 66 }, { x: 70, y: 13 }, { x: 30, y: 13 }, { x: 29 - 12 * spread, y: 66 }]
   };
   if (MOBILE_QUERY.matches && mobileSeatMaps[count]?.[index]) {
     return mobileSeatMaps[count][index];
@@ -625,7 +625,7 @@ function mobileSeatSpread() {
   if (!MOBILE_QUERY.matches) return 1;
   const value = Number.parseInt(uiScaleInput?.value || defaultPageZoom(), 10);
   if (!Number.isFinite(value)) return 1;
-  return Math.min(1, Math.max(0, (value - 50) / 50));
+  return Math.min(1, Math.max(0, (value - 50) / 70));
 }
 
 function renderPigMarks(count, options = {}) {
