@@ -82,6 +82,27 @@ function testRoomFlow() {
   assert.equal(room.round.trick.length, 1);
 }
 
+function testVariablePlayerCounts() {
+  const room3 = createRoom("a", "甲", "a", { playerCount: 3 });
+  room3.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "seat-1", directionLabel: "东", pigCount: 0, connected: true });
+  room3.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "seat-2", directionLabel: "西", pigCount: 0, connected: true });
+  startRound(room3);
+  assert.equal(room3.round.hands.length, 3);
+  assert.deepEqual(room3.round.hands.map((hand) => hand.length), [17, 17, 17]);
+  assert.equal(room3.round.hands.flat().some((item) => item.id === "C2"), false);
+
+  const room5 = createRoom("a", "甲", "a", { playerCount: 5 });
+  for (let seat = 1; seat < 5; seat += 1) {
+    room5.players.push({ socketId: String(seat), clientId: String(seat), name: `玩家${seat}`, seat, direction: `seat-${seat}`, directionLabel: String(seat), pigCount: 0, connected: true });
+  }
+  startRound(room5);
+  assert.equal(room5.round.hands.length, 5);
+  assert.deepEqual(room5.round.hands.map((hand) => hand.length), [10, 10, 10, 10, 10]);
+  const ids = new Set(room5.round.hands.flat().map((item) => item.id));
+  assert.equal(ids.has("C2"), false);
+  assert.equal(ids.has("D2"), false);
+}
+
 function testBloodLock() {
   const room = createRoom("a", "甲");
   room.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", pigCount: 0, connected: true });
@@ -181,6 +202,7 @@ function testAllHeartsMakesOthersPigs() {
 
 testScoring();
 testRoomFlow();
+testVariablePlayerCounts();
 testBloodLock();
 testPigCount();
 testTiedLowestPigCount();

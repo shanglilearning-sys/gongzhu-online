@@ -47,7 +47,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -95,7 +96,8 @@ button.join-submit:hover {
   filter: brightness(1.05);
 }
 
-input {
+input,
+select {
   width: 100%;
   height: 44px;
   border: 1px solid rgba(80, 62, 36, 0.18);
@@ -106,7 +108,8 @@ input {
   outline: none;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: var(--felt);
   box-shadow: 0 0 0 3px rgba(17, 104, 79, 0.16);
 }
@@ -311,7 +314,7 @@ body.table-mode-active {
   grid-column: 1 / -1;
   border-radius: 8px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--player-count, 4), minmax(0, 1fr));
   gap: 8px;
   padding: 8px;
 }
@@ -609,28 +612,14 @@ body.table-mode-active {
 
 .played-card {
   position: absolute;
-  transform: translate(-50%, -50%);
+  left: 50%;
+  top: 50%;
+  transform:
+    translate(-50%, -50%)
+    rotate(var(--angle, 90deg))
+    translateY(calc(86px * var(--ui-scale)))
+    rotate(calc(-1 * var(--angle, 90deg)));
   animation: trickPop 320ms cubic-bezier(0.2, 0.9, 0.28, 1.2);
-}
-
-.played-card[data-pos="south"] {
-  left: 50%;
-  top: 78%;
-}
-
-.played-card[data-pos="east"] {
-  left: 78%;
-  top: 50%;
-}
-
-.played-card[data-pos="north"] {
-  left: 50%;
-  top: 22%;
-}
-
-.played-card[data-pos="west"] {
-  left: 22%;
-  top: 50%;
 }
 
 .status-line {
@@ -672,11 +661,11 @@ body.table-mode-active {
   animation: softPulse 1.2s ease-in-out infinite;
 }
 
-.game-screen[data-phase="play"] .trick-area:has(.played-card:nth-child(4)) .played-card {
+.game-screen[data-phase="play"] .trick-area:has(.played-card:nth-child(3)) .played-card {
   animation-duration: 420ms;
 }
 
-.game-screen[data-phase="play"] .trick-area:has(.played-card:nth-child(4)) {
+.game-screen[data-phase="play"] .trick-area:has(.played-card:nth-child(3)) {
   animation: settleGlow 1s ease both;
 }
 
@@ -722,14 +711,6 @@ body.table-mode-active {
   animation: seatIn 260ms ease both;
 }
 
-.game-screen.table-mode .slot-north {
-  top: clamp(68px, calc(76px * var(--ui-scale)), 88px);
-}
-
-.game-screen.table-mode .slot-south {
-  bottom: clamp(132px, calc(148px * var(--ui-scale)), 174px);
-}
-
 .player-slot.current {
   border-color: rgba(224, 184, 90, 0.95);
   box-shadow: 0 0 0 3px rgba(224, 184, 90, 0.18), 0 16px 28px rgba(0, 0, 0, 0.28);
@@ -744,28 +725,10 @@ body.table-mode-active {
   opacity: 0.58;
 }
 
-.slot-north {
-  top: calc(14px * var(--ui-scale));
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.slot-east {
-  right: calc(14px * var(--ui-scale));
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.slot-south {
-  bottom: calc(14px * var(--ui-scale));
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.slot-west {
-  left: calc(14px * var(--ui-scale));
-  top: 50%;
-  transform: translateY(-50%);
+.player-slot {
+  left: var(--seat-x, 50%);
+  top: var(--seat-y, 50%);
+  transform: translate(-50%, -50%);
 }
 
 .slot-top {
@@ -823,7 +786,7 @@ body.table-mode-active {
   font-weight: 950;
 }
 
-.reaction-button[data-reaction="flower"] {
+.reaction-button[data-reaction="like"] {
   border-color: rgba(255, 189, 205, 0.34);
   background: rgba(201, 52, 69, 0.17);
 }
@@ -833,13 +796,12 @@ body.table-mode-active {
   background: rgba(224, 184, 90, 0.16);
 }
 
-.reaction-burst {
+.reaction-flight {
   position: absolute;
-  z-index: 7;
-  left: 50%;
-  top: 46%;
+  z-index: 8;
+  left: 0;
+  top: 0;
   pointer-events: none;
-  transform: translate(-50%, -50%);
   min-width: 38px;
   min-height: 38px;
   display: inline-grid;
@@ -851,15 +813,15 @@ body.table-mode-active {
   font-size: 17px;
   font-weight: 950;
   box-shadow: 0 12px 26px rgba(0, 0, 0, 0.3);
-  animation: reactionBurst 1s cubic-bezier(0.18, 0.88, 0.2, 1) forwards;
+  animation: reactionFlight 1.05s cubic-bezier(0.2, 0.8, 0.22, 1) forwards;
 }
 
-.reaction-burst.flower {
+.reaction-flight.like {
   color: #ffd1da;
   border-color: rgba(255, 189, 205, 0.6);
 }
 
-.reaction-burst.egg {
+.reaction-flight.egg {
   color: #ffe8a8;
   border-color: rgba(245, 217, 133, 0.64);
 }
@@ -1380,22 +1342,21 @@ body.table-mode-active {
   }
 }
 
-@keyframes reactionBurst {
+@keyframes reactionFlight {
   0% {
     opacity: 0;
-    transform: translate(-50%, -36%) scale(0.64);
+    transform: translate(var(--from-x), var(--from-y)) translate(-50%, -50%) scale(0.68) rotate(-8deg);
   }
-  18% {
+  18%,
+  72% {
     opacity: 1;
-    transform: translate(-50%, -58%) scale(1.08) rotate(-5deg);
   }
-  68% {
-    opacity: 1;
-    transform: translate(-50%, -82%) scale(1) rotate(4deg);
+  48% {
+    transform: translate(var(--mid-x), var(--mid-y)) translate(-50%, -50%) scale(1.12) rotate(12deg);
   }
   100% {
     opacity: 0;
-    transform: translate(-50%, -108%) scale(0.88) rotate(0deg);
+    transform: translate(var(--to-x), var(--to-y)) translate(-50%, -50%) scale(0.9) rotate(0deg);
   }
 }
 
@@ -1559,14 +1520,6 @@ body.table-mode-active {
     min-height: calc(198px * var(--ui-scale));
   }
 
-  .played-card[data-pos="east"] {
-    left: 82%;
-  }
-
-  .played-card[data-pos="west"] {
-    left: 18%;
-  }
-
   .status-line {
     min-height: 28px;
     max-width: 230px;
@@ -1613,22 +1566,6 @@ body.table-mode-active {
     font-size: 11px;
   }
 
-  .slot-north {
-    top: 9px;
-  }
-
-  .slot-east {
-    right: 8px;
-  }
-
-  .slot-south {
-    bottom: 9px;
-  }
-
-  .slot-west {
-    left: 8px;
-  }
-
   .slot-seat {
     width: 20px;
     height: 20px;
@@ -1658,21 +1595,25 @@ body.table-mode-active {
     top: 6px;
     left: 6px;
     right: 6px;
+    min-height: 44px;
+    align-items: center;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .game-screen.table-mode .scale-control {
+    display: none;
   }
 
   .game-screen.table-mode .table {
     inset:
-      clamp(92px, calc(102px * var(--ui-scale)), 116px)
-      clamp(54px, calc(62px * var(--ui-scale)), 72px)
-      clamp(130px, calc(146px * var(--ui-scale)), 170px);
+      clamp(80px, calc(88px * var(--ui-scale)), 98px)
+      clamp(48px, calc(56px * var(--ui-scale)), 66px)
+      clamp(126px, calc(138px * var(--ui-scale)), 156px);
   }
 
-  .game-screen.table-mode .slot-north {
-    top: 62px;
-  }
-
-  .game-screen.table-mode .slot-south {
-    bottom: clamp(116px, calc(128px * var(--ui-scale)), 148px);
+  .game-screen.table-mode .player-slot {
+    width: clamp(112px, calc(124px * var(--ui-scale)), 138px);
   }
 
   .game-screen.table-mode .table-exposed-badge {

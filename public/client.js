@@ -7,7 +7,6 @@ const SUIT_SYMBOLS = { S: "♠", H: "♥", D: "♦", C: "♣" };
 const SUIT_NAMES = { S: "黑桃", H: "红桃", D: "方块", C: "梅花" };
 const SPECIAL_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
-const VIEW_POSITIONS = ["south", "east", "north", "west"];
 const CLIENT_ID_KEY = "gongzhuClientId";
 const UI_SCALE_KEY = "gongzhuUiScale";
 
@@ -21,6 +20,7 @@ const joinForm = document.querySelector("#join-form");
 const nameInput = document.querySelector("#name-input");
 const codeInput = document.querySelector("#code-input");
 const createButton = document.querySelector("#create-button");
+const modeSelect = document.querySelector("#mode-select");
 const entryError = document.querySelector("#entry-error");
 const roomCode = document.querySelector("#room-code");
 const phaseTitle = document.querySelector("#phase-title");
@@ -37,6 +37,7 @@ const trickArea = document.querySelector("#trick-area");
 const statusLine = document.querySelector("#status-line");
 const lastTrick = document.querySelector("#last-trick");
 const tableWrap = document.querySelector(".table-wrap");
+const playerSlots = document.querySelector("#player-slots");
 const handTitle = document.querySelector("#hand-title");
 const handEl = document.querySelector("#hand");
 const exposeButton = document.querySelector("#expose-button");
@@ -65,7 +66,7 @@ applyUiScale(getSavedUiScale());
 
 createButton.addEventListener("click", () => {
   const name = getName();
-  socket.emit("createRoom", { name, clientId }, handleJoinResponse);
+  socket.emit("createRoom", { name, clientId, playerCount: getSelectedPlayerCount() }, handleJoinResponse);
 });
 
 joinForm.addEventListener("submit", (event) => {
@@ -219,6 +220,11 @@ function applyUiScale(value) {
   if (uiScaleValue) uiScaleValue.textContent = `${scale}%`;
 }
 
+function getSelectedPlayerCount() {
+  const count = Number.parseInt(modeSelect?.value || "4", 10);
+  return [3, 4, 5].includes(count) ? count : 4;
+}
+
 function handleJoinResponse(response) {
   if (!response?.ok) {
     entryError.textContent = roomErrorMessage(response?.error || "操作失败");
@@ -252,6 +258,8 @@ function render() {
   const myTurn = phase === "play" && state.me?.seat === state.round?.currentPlayer;
   game.dataset.phase = phase;
   game.dataset.myTurn = myTurn ? "true" : "false";
+  game.dataset.playerCount = String(playerCountForState());
+  game.style.setProperty("--player-count", String(playerCountForState()));
   roomCode.textContent = state.code;
   renderTopbar();
   renderScores();
@@ -264,11 +272,12 @@ function render() {
 
 function renderTopbar() {
   const playerCount = state.players.length;
+  const targetCount = playerCountForState();
   const phase = state.round?.phase;
   const current = state.players[state.round?.currentPlayer];
 
   if (state.phase === "lobby") {
-    phaseTitle.textContent = `等待玩家 ${playerCount}/4`;
+    phaseTitle.textContent = `等待玩家 ${playerCount}/${targetCount}`;
   } else if (phase === "expose") {
     phaseTitle.textContent = `卖牌阶段 · ${exposeCountdownSeconds()} 秒后开打`;
   } else if (phase === "play") {
@@ -279,7 +288,7 @@ function renderTopbar() {
 
   const isHost = state.hostId === socket.id;
   startButton.classList.toggle("hidden", state.phase !== "lobby");
-  startButton.disabled = !isHost || playerCount !== 4;
+  startButton.disabled = !isHost || playerCount !== targetCount;
   newRoundButton.classList.toggle("hidden", phase !== "finished");
   newRoundButton.disabled = !isHost;
 }
@@ -314,14 +323,18 @@ function renderScores() {
 
 function renderSlots() {
   renderTableExposedBadge();
-  const seatByPosition = seatsByViewPosition();
-  document.querySelectorAll(".player-slot").forEach((slot) => {
-    const seat = Number.isInteger(seatByPosition[slot.dataset.viewPos])
-      ? seatByPosition[slot.dataset.viewPos]
-      : Number(slot.dataset.seat || 0);
+  const seats = orderedSeatsForView();
+  playerSlots.innerHTML = "";
+  seats.forEach((seat, index) => {
+    const slot = document.createElement("div");
+    slot.className = "player-slot";
+    slot.dataset.viewIndex = String(index);
+    slot.dataset.seat = String(seat);
+    const point = slotPoint(index, seats.length);
+    slot.style.setProperty("--seat-x", `${point.x}%`);
+    slot.style.setProperty("--seat-y", `${point.y}%`);
     const player = state.players[seat];
     const currentScore = currentRoundScore(seat);
-    slot.dataset.seat = String(seat);
     slot.classList.toggle("current", state.round?.currentPlayer === seat);
     slot.classList.toggle("me", state.me?.seat === seat);
     slot.classList.toggle("offline", player?.connected === false);
@@ -344,7 +357,7 @@ function renderSlots() {
       ${player ? `
         <div class="slot-actions" aria-label="玩家互动">
           <button type="button" class="reaction-button" data-reaction="egg" title="投鸡蛋">鸡蛋</button>
-          <button type="button" class="reaction-button" data-reaction="flower" title="送花">送花</button>
+          <button type="button" class="reaction-button" data-reaction="like" title="点赞">点赞</button>
         </div>
       ` : ""}
       ${player?.connected === false ? `<div class="slot-alert">断线</div>` : ""}
@@ -355,6 +368,7 @@ function renderSlots() {
         sendReaction(seat, button.dataset.reaction);
       });
     });
+    playerSlots.appendChild(slot);
   });
 }
 
@@ -380,8 +394,7 @@ function renderTrick() {
   for (const play of trick) {
     const wrapper = document.createElement("div");
     wrapper.className = "played-card";
-    wrapper.dataset.pos = viewPositionForSeat(play.seat);
-    wrapper.style.setProperty("--seat", relativeSeat(play.seat));
+    wrapper.style.setProperty("--angle", `${seatAngle(relativeSeat(play.seat))}deg`);
     wrapper.appendChild(makeCard(play.card, { small: true, disabled: true, exposed: play.exposed }));
     trickArea.appendChild(wrapper);
   }
@@ -451,7 +464,7 @@ function renderHand() {
 function renderSidePanel() {
   renderExposed();
   scorePreview.innerHTML = "";
-  const preview = state.round?.scorePreview || [0, 0, 0, 0];
+  const preview = state.round?.scorePreview || [];
   for (const seat of orderedSeatsForView()) {
     const row = document.createElement("div");
     row.className = "mini-row";
@@ -510,21 +523,37 @@ function renderExposed() {
 
 function orderedSeatsForView() {
   const baseSeat = Number.isInteger(state?.me?.seat) ? state.me.seat : 0;
-  return [0, 1, 2, 3].map((offset) => (baseSeat + offset) % 4);
+  const count = playerCountForState();
+  return Array.from({ length: count }, (_, offset) => (baseSeat + offset) % count);
 }
 
-function seatsByViewPosition() {
-  const seats = orderedSeatsForView();
-  return Object.fromEntries(VIEW_POSITIONS.map((position, index) => [position, seats[index]]));
+function playerCountForState() {
+  const count = Number.parseInt(state?.playerCount || state?.round?.playerCount || state?.players?.length || 4, 10);
+  return [3, 4, 5].includes(count) ? count : 4;
 }
 
 function relativeSeat(seat) {
   const baseSeat = Number.isInteger(state?.me?.seat) ? state.me.seat : 0;
-  return ((seat - baseSeat) + 4) % 4;
+  const count = playerCountForState();
+  return ((seat - baseSeat) + count) % count;
 }
 
-function viewPositionForSeat(seat) {
-  return VIEW_POSITIONS[relativeSeat(seat)] || "south";
+function seatAngle(relative) {
+  const count = playerCountForState();
+  return 90 + (360 * relative / count);
+}
+
+function slotPoint(index, count) {
+  if (tableModeEnabled && index === 0) {
+    return { x: 50, y: window.innerWidth <= 640 ? 78 : 82 };
+  }
+  const angle = (Math.PI / 2) + (Math.PI * 2 * index / count);
+  const xRadius = count === 5 ? 43 : 41;
+  const yRadius = tableModeEnabled ? 43 : (index === 0 ? 37 : 39);
+  return {
+    x: 50 + Math.cos(angle) * xRadius,
+    y: 50 + Math.sin(angle) * yRadius
+  };
 }
 
 function renderPigMarks(count, options = {}) {
@@ -644,6 +673,7 @@ async function toggleTableMode() {
   if (screen.orientation?.lock) {
     await screen.orientation.lock("landscape").catch(() => {});
   }
+  showRotateHintIfNeeded();
 }
 
 function setTableMode(enabled) {
@@ -658,6 +688,12 @@ function setTableMode(enabled) {
   }
 }
 
+function showRotateHintIfNeeded() {
+  if (!tableModeEnabled) return;
+  if (window.innerWidth >= window.innerHeight) return;
+  statusLine.textContent = "已进入桌面模式，手机请手动横屏获得最佳视野";
+}
+
 function sendReaction(targetSeat, kind) {
   socket.emit("playerReaction", { targetSeat, kind }, (response) => {
     if (!response?.ok) {
@@ -667,14 +703,30 @@ function sendReaction(targetSeat, kind) {
 }
 
 function showReaction(reaction) {
-  const slot = document.querySelector(`.player-slot[data-seat="${reaction?.targetSeat}"]`);
-  if (!slot || !reaction?.kind) return;
+  const fromSlot = document.querySelector(`.player-slot[data-seat="${reaction?.fromSeat}"]`);
+  const targetSlot = document.querySelector(`.player-slot[data-seat="${reaction?.targetSeat}"]`);
+  if (!fromSlot || !targetSlot || !reaction?.kind) return;
+  const tableRect = tableWrap.getBoundingClientRect();
+  const fromRect = fromSlot.getBoundingClientRect();
+  const targetRect = targetSlot.getBoundingClientRect();
+  const startX = fromRect.left + fromRect.width / 2 - tableRect.left;
+  const startY = fromRect.top + fromRect.height / 2 - tableRect.top;
+  const endX = targetRect.left + targetRect.width / 2 - tableRect.left;
+  const endY = targetRect.top + targetRect.height / 2 - tableRect.top;
+  const lift = Math.max(70, Math.min(170, Math.hypot(endX - startX, endY - startY) * 0.28));
+  const drift = (Math.random() - 0.5) * 110;
   const item = document.createElement("div");
-  item.className = `reaction-burst ${reaction.kind === "flower" ? "flower" : "egg"}`;
-  item.textContent = reaction.kind === "flower" ? "花" : "蛋";
-  item.title = `${reaction.fromName || "玩家"} ${reaction.kind === "flower" ? "送花" : "投鸡蛋"}`;
-  slot.appendChild(item);
-  setTimeout(() => item.remove(), 1100);
+  item.className = `reaction-flight ${reaction.kind === "like" ? "like" : "egg"}`;
+  item.textContent = reaction.kind === "like" ? "赞" : "蛋";
+  item.title = `${reaction.fromName || "玩家"} ${reaction.kind === "like" ? "点赞" : "投鸡蛋"}`;
+  item.style.setProperty("--from-x", `${startX}px`);
+  item.style.setProperty("--from-y", `${startY}px`);
+  item.style.setProperty("--mid-x", `${(startX + endX) / 2 + drift}px`);
+  item.style.setProperty("--mid-y", `${Math.min(startY, endY) - lift}px`);
+  item.style.setProperty("--to-x", `${endX}px`);
+  item.style.setProperty("--to-y", `${endY}px`);
+  tableWrap.appendChild(item);
+  setTimeout(() => item.remove(), 1150);
 }
 
 function openScoreCards(seat) {
@@ -741,7 +793,8 @@ function openRules() {
       <div><strong>分牌</strong><span>黑桃 Q -100，羊 +100，红桃 5-A 为负分，变压器单收 +50。</span></div>
       <div><strong>全红</strong><span>收齐全部红桃转为 +200；红桃 A 被卖后为 +400。</span></div>
       <div><strong>当猪</strong><span>每局最终分数最低者当猪；并列最低一起当猪；有人收全红时，其余三人当猪。</span></div>
-      <div><strong>互动</strong><span>点击玩家窗口里的鸡蛋或送花按钮，可以给朋友一点牌桌气氛。</span></div>
+      <div><strong>模式</strong><span>创建房间时可选择三人、四人或五人模式；三人移除梅花 2，五人移除梅花 2 和方块 2。</span></div>
+      <div><strong>互动</strong><span>点击玩家窗口里的鸡蛋或点赞，全场会看到从你飞向对方的动画。</span></div>
       <div><strong>嘉铭赞助</strong><span>本桌由嘉铭冠名赞助，输赢各凭牌技。</span></div>
     </div>
   `;

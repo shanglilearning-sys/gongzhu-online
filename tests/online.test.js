@@ -88,6 +88,7 @@ function connectClient(url) {
 
 async function main() {
   await testProcessRestartRestore();
+  await testPlayerCountModes();
   await testFullGameFlow();
 }
 
@@ -227,8 +228,11 @@ async function testFullGameFlow() {
         resolve(reaction);
       });
     });
-    await clients[0].emit("playerReaction", { targetSeat: clients[1].state.me.seat, kind: "flower" });
-    assert.equal((await reactionSeen).kind, "flower");
+    await clients[0].emit("playerReaction", { targetSeat: clients[1].state.me.seat, kind: "like" });
+    const reaction = await reactionSeen;
+    assert.equal(reaction.kind, "like");
+    assert.equal(reaction.fromSeat, clients[0].state.me.seat);
+    assert.equal(reaction.targetSeat, clients[1].state.me.seat);
 
     let sawSettlingTrick = false;
 
@@ -281,6 +285,42 @@ async function testFullGameFlow() {
       assert.ok(publicScoreCardIds.includes(id), `score cards should include ${id}`);
     }
     console.log("online ok");
+  } finally {
+    for (const client of clients) client.socket.disconnect();
+    await io.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testPlayerCountModes() {
+  await testModeRoom(3, 17);
+  await testModeRoom(5, 10);
+}
+
+async function testModeRoom(playerCount, handSize) {
+  const { server, io, ready } = createGameServer({ trickSettleDelayMs: 10, exposeDurationMs: 20 });
+  await ready;
+  const port = await listen(server);
+  const url = `http://127.0.0.1:${port}`;
+  const clients = Array.from({ length: playerCount }, () => connectClient(url));
+  try {
+    await Promise.all(clients.map((client) => client.connected));
+    const { code } = await clients[0].emit("createRoom", { name: "房主", clientId: `mode-${playerCount}-0`, playerCount });
+    for (let index = 1; index < playerCount; index += 1) {
+      await clients[index].emit("joinRoom", { code, name: `玩家${index}`, clientId: `mode-${playerCount}-${index}` });
+    }
+    await Promise.all(clients.map((client) => client.waitFor(
+      (state) => state.playerCount === playerCount && state.players.length === playerCount,
+      `${playerCount} player lobby`
+    )));
+    await clients[0].emit("startGame");
+    await Promise.all(clients.map((client) => client.waitFor(
+      (state) => state.round?.phase === "expose" && state.hand.length === handSize,
+      `${playerCount} player expose`
+    )));
+    assert.equal(clients[0].state.round.playerCount, playerCount);
+    assert.equal(clients[0].state.round.scorePreview.length, playerCount);
+    console.log(`${playerCount}p mode ok`);
   } finally {
     for (const client of clients) client.socket.disconnect();
     await io.close();

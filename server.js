@@ -13,8 +13,17 @@ const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
 const RANK_VALUE = Object.fromEntries(RANKS.map((rank, index) => [rank, index + 2]));
 const SUIT_NAMES = { S: "黑桃", H: "红桃", D: "方块", C: "梅花" };
 const CARD_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
-const DIRECTIONS = ["south", "east", "north", "west"];
-const DIRECTION_LABELS = ["南", "东", "北", "西"];
+const SUPPORTED_PLAYER_COUNTS = new Set([3, 4, 5]);
+const DIRECTION_LABELS_BY_COUNT = {
+  3: ["南", "东", "西"],
+  4: ["南", "东", "北", "西"],
+  5: ["南", "东南", "东北", "西北", "西南"]
+};
+const REMOVED_CARDS_BY_COUNT = {
+  3: ["C2"],
+  4: [],
+  5: ["C2", "D2"]
+};
 const SPECIAL_CARDS = ["SQ", "DJ", "C10", "HA"];
 const SCORING_CARD_IDS = new Set(["SQ", "DJ", "C10", "H5", "H6", "H7", "H8", "H9", "H10", "HJ", "HQ", "HK", "HA"]);
 const DEFAULT_TRICK_SETTLE_DELAY_MS = Number.parseInt(process.env.TRICK_SETTLE_DELAY_MS || "1000", 10);
@@ -137,12 +146,14 @@ function createGameServer(options = {}) {
     return code ? rooms.get(code) : null;
   }
 
-  function createRoom(hostSocketId, hostName, hostClientId) {
+  function createRoom(hostSocketId, hostName, hostClientId, options = {}) {
     const code = makeRoomCode(rooms);
     const clientId = normalizeClientId(hostClientId, hostSocketId);
+    const playerCount = normalizePlayerCount(options.playerCount);
     const room = {
       code,
       phase: "lobby",
+      playerCount,
       players: [],
       spectators: [],
       hostId: hostSocketId,
@@ -174,11 +185,7 @@ function createGameServer(options = {}) {
 
     if (room.phase === "lobby") {
       room.players = room.players.filter((candidate) => candidate.socketId !== socketId);
-      room.players.forEach((candidate, index) => {
-        candidate.seat = index;
-        candidate.direction = DIRECTIONS[index];
-        candidate.directionLabel = DIRECTION_LABELS[index];
-      });
+      reseatPlayers(room);
       if (room.players.length > 0) {
         room.hostId = room.players[0].socketId;
         room.hostClientId = room.players[0].clientId;
@@ -249,7 +256,7 @@ function createGameServer(options = {}) {
     const delay = Math.max(0, pending.resolveAt - Date.now());
     room.trickTimer = setTimeout(() => {
       room.trickTimer = null;
-      if (!room.round?.pendingTrickResolution || room.round.trick.length !== 4) {
+      if (!room.round?.pendingTrickResolution || room.round.trick.length !== getPlayerCount(room)) {
         persistRooms();
         return;
       }
@@ -264,11 +271,11 @@ function createGameServer(options = {}) {
   });
 
   io.on("connection", (socket) => {
-    socket.on("createRoom", ({ name, clientId } = {}, callback = () => {}) => {
+    socket.on("createRoom", ({ name, clientId, playerCount } = {}, callback = () => {}) => {
       try {
-        const room = createRoom(socket.id, name, clientId);
+        const room = createRoom(socket.id, name, clientId, { playerCount });
         socket.join(room.code);
-        pushMessage(room, `${room.players[0].name} 创建了房间。`);
+        pushMessage(room, `${room.players[0].name} 创建了 ${room.playerCount} 人房间。`);
         console.log(`[${INSTANCE_ID}] create room ${room.code} by ${room.players[0].name}`);
         persistRooms();
         emitRoom(room);
@@ -402,15 +409,16 @@ function createGameServer(options = {}) {
       try {
         const room = getRoomForSocket(socket);
         if (!room) throw new Error("请先进入房间");
-        const sender = room.players.find((candidate) => candidate.socketId === socket.id)
-          || room.spectators.find((candidate) => candidate.socketId === socket.id);
-        if (!sender) throw new Error("你不在这个房间");
+        const sender = room.players.find((candidate) => candidate.socketId === socket.id);
+        if (!sender) throw new Error("只有牌桌玩家可以互动");
         const seat = Number.parseInt(targetSeat, 10);
         if (!Number.isInteger(seat) || seat < 0 || seat >= room.players.length) throw new Error("目标玩家不存在");
-        if (!["egg", "flower"].includes(kind)) throw new Error("未知互动");
+        const normalizedKind = kind === "flower" ? "like" : kind;
+        if (!["egg", "like"].includes(normalizedKind)) throw new Error("未知互动");
         const reaction = {
           id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          kind,
+          kind: normalizedKind,
+          fromSeat: sender.seat,
           targetSeat: seat,
           fromName: sender.name,
           at: Date.now()
@@ -568,6 +576,7 @@ function roomToSnapshot(room) {
   const snapshot = {
     code: room.code,
     phase: room.phase,
+    playerCount: getPlayerCount(room),
     players: room.players.map(participantToSnapshot),
     spectators: room.spectators.map(participantToSnapshot),
     hostClientId: room.hostClientId,
@@ -612,7 +621,7 @@ function roundToSnapshot(round) {
       exposed: Boolean(play.exposed)
     }))
   } : null;
-  snapshot.pigSeats = Array.isArray(round.pigSeats) ? round.pigSeats.slice(0, 4) : [];
+  snapshot.pigSeats = Array.isArray(round.pigSeats) ? round.pigSeats.slice(0, getRoundPlayerCount(round)) : [];
   return snapshot;
 }
 
@@ -626,20 +635,21 @@ function cardSnapshot(card) {
 
 function roomFromSnapshot(snapshot) {
   if (!snapshot?.code || !Array.isArray(snapshot.players)) return null;
-  const players = snapshot.players.slice(0, 4).map((player, index) => ({
+  const playerCount = normalizePlayerCount(snapshot.playerCount || snapshot.players.length || 4);
+  const players = snapshot.players.slice(0, playerCount).map((player, index) => ({
     socketId: null,
     clientId: normalizeClientId(player.clientId, `restored-${snapshot.code}-${index}`),
     name: String(player.name || "玩家").trim().slice(0, 16) || "玩家",
     seat: index,
-    direction: DIRECTIONS[index],
-    directionLabel: DIRECTION_LABELS[index],
+    direction: directionForSeat(index, playerCount),
+    directionLabel: directionLabelForSeat(index, playerCount),
     pigCount: Number.isFinite(player.pigCount) ? player.pigCount : 0,
     connected: false
   }));
   if (players.length === 0) return null;
-  const round = snapshot.round ? roundFromSnapshot(snapshot.round) : null;
+  const round = snapshot.round ? roundFromSnapshot(snapshot.round, playerCount) : null;
   if (round?.pendingTrickResolution) {
-    if (round.trick.length === 4) {
+    if (round.trick.length === playerCount) {
       round.pendingTrickResolution.resolveAt = Math.min(round.pendingTrickResolution.resolveAt, Date.now());
       round.currentPlayer = null;
     } else {
@@ -650,6 +660,7 @@ function roomFromSnapshot(snapshot) {
   return {
     code: String(snapshot.code).trim().toUpperCase(),
     phase: snapshot.phase || (round ? "playing" : "lobby"),
+    playerCount,
     players,
     spectators: Array.isArray(snapshot.spectators)
       ? snapshot.spectators.map((spectator, index) => ({
@@ -670,7 +681,7 @@ function roomFromSnapshot(snapshot) {
   };
 }
 
-function roundFromSnapshot(snapshot) {
+function roundFromSnapshot(snapshot, playerCount = 4) {
   const currentPlayer = Number.isFinite(snapshot.currentPlayer)
     ? snapshot.currentPlayer
     : null;
@@ -683,6 +694,7 @@ function roundFromSnapshot(snapshot) {
   const round = {
     handNumber: snapshot.handNumber || 1,
     phase: snapshot.phase || "play",
+    playerCount,
     hands: normalizeCardMatrix(snapshot.hands),
     taken: normalizeCardMatrix(snapshot.taken),
     exposed,
@@ -720,18 +732,20 @@ function roundFromSnapshot(snapshot) {
         : []
     } : null,
     heartsSeen: Boolean(snapshot.heartsSeen),
-    scorePreview: Array.isArray(snapshot.scorePreview) ? snapshot.scorePreview.slice(0, 4) : [0, 0, 0, 0],
-    finishedScores: Array.isArray(snapshot.finishedScores) ? snapshot.finishedScores.slice(0, 4) : null,
-    pigSeats: Array.isArray(snapshot.pigSeats) ? snapshot.pigSeats.filter((seat) => Number.isInteger(seat)).slice(0, 4) : []
+    scorePreview: Array.isArray(snapshot.scorePreview) ? snapshot.scorePreview.slice(0, playerCount) : zeroScores(playerCount),
+    finishedScores: Array.isArray(snapshot.finishedScores) ? snapshot.finishedScores.slice(0, playerCount) : null,
+    pigSeats: Array.isArray(snapshot.pigSeats) ? snapshot.pigSeats.filter((seat) => Number.isInteger(seat)).slice(0, playerCount) : []
   };
-  while (round.hands.length < 4) round.hands.push([]);
-  while (round.taken.length < 4) round.taken.push([]);
+  while (round.hands.length < playerCount) round.hands.push([]);
+  while (round.taken.length < playerCount) round.taken.push([]);
+  round.hands = round.hands.slice(0, playerCount);
+  round.taken = round.taken.slice(0, playerCount);
   updateScorePreview(round);
   return round;
 }
 
-function normalizeCardMatrix(matrix) {
-  const rows = Array.isArray(matrix) ? matrix.slice(0, 4) : [];
+function normalizeCardMatrix(matrix, maxRows = 5) {
+  const rows = Array.isArray(matrix) ? matrix.slice(0, maxRows) : [];
   return rows.map((cards) => Array.isArray(cards) ? cards.filter(Boolean).map(cardSnapshot) : []);
 }
 
@@ -743,6 +757,55 @@ function makeDeck() {
     }
   }
   return deck;
+}
+
+function deckForPlayerCount(playerCount) {
+  const removed = new Set(REMOVED_CARDS_BY_COUNT[playerCount] || []);
+  return makeDeck().filter((card) => !removed.has(card.id));
+}
+
+function normalizePlayerCount(value) {
+  const count = Number.parseInt(value, 10);
+  return SUPPORTED_PLAYER_COUNTS.has(count) ? count : 4;
+}
+
+function getPlayerCount(room) {
+  return normalizePlayerCount(room?.playerCount || room?.players?.length || 4);
+}
+
+function getRoundPlayerCount(round) {
+  const explicit = Number.parseInt(round?.playerCount, 10);
+  if (SUPPORTED_PLAYER_COUNTS.has(explicit)) return explicit;
+  const handCount = Array.isArray(round?.hands) ? round.hands.length : 0;
+  if (SUPPORTED_PLAYER_COUNTS.has(handCount)) return handCount;
+  const takenCount = Array.isArray(round?.taken) ? round.taken.length : 0;
+  if (SUPPORTED_PLAYER_COUNTS.has(takenCount)) return takenCount;
+  return 4;
+}
+
+function zeroScores(playerCount) {
+  return Array.from({ length: playerCount }, () => 0);
+}
+
+function seatIndexes(playerCount) {
+  return Array.from({ length: playerCount }, (_, seat) => seat);
+}
+
+function directionForSeat(seat, playerCount) {
+  return `seat-${seat}`;
+}
+
+function directionLabelForSeat(seat, playerCount) {
+  return DIRECTION_LABELS_BY_COUNT[playerCount]?.[seat] || String(seat + 1);
+}
+
+function reseatPlayers(room) {
+  const playerCount = getPlayerCount(room);
+  room.players.forEach((candidate, index) => {
+    candidate.seat = index;
+    candidate.direction = directionForSeat(index, playerCount);
+    candidate.directionLabel = directionLabelForSeat(index, playerCount);
+  });
 }
 
 function shuffle(cards) {
@@ -773,14 +836,16 @@ function makeRoomCode(rooms) {
   throw new Error("Unable to create room code");
 }
 
-function createTestRoom(hostSocketId, hostName, hostClientId = hostSocketId) {
+function createTestRoom(hostSocketId, hostName, hostClientId = hostSocketId, options = {}) {
   const rooms = new Map();
   const socketRooms = new Map();
   const code = makeRoomCode(rooms);
   const clientId = normalizeClientId(hostClientId, hostSocketId);
+  const playerCount = normalizePlayerCount(options.playerCount);
   const room = {
     code,
     phase: "lobby",
+    playerCount,
     players: [],
     spectators: [],
     hostId: hostSocketId,
@@ -846,7 +911,8 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = so
     return reconnectParticipant(room, reconnectingSpectator, socketId, cleanName, socketRooms);
   }
 
-  if (room.players.length >= 4 || room.phase !== "lobby") {
+  const playerCount = getPlayerCount(room);
+  if (room.players.length >= playerCount || room.phase !== "lobby") {
     const spectator = {
       socketId,
       clientId: cleanClientId,
@@ -864,8 +930,8 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = so
     clientId: cleanClientId,
     name: cleanName,
     seat: room.players.length,
-    direction: DIRECTIONS[room.players.length],
-    directionLabel: DIRECTION_LABELS[room.players.length],
+    direction: directionForSeat(room.players.length, playerCount),
+    directionLabel: directionLabelForSeat(room.players.length, playerCount),
     pigCount: 0,
     connected: true
   };
@@ -875,9 +941,11 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = so
 }
 
 function publicRoom(room) {
+  const playerCount = getPlayerCount(room);
   return {
     code: room.code,
     phase: room.phase,
+    playerCount,
     hostId: room.hostId,
     instanceId: INSTANCE_ID,
     players: room.players.map((player) => ({
@@ -902,8 +970,10 @@ function publicRoom(room) {
 }
 
 function publicRound(round) {
+  const playerCount = getRoundPlayerCount(round);
   return {
     handNumber: round.handNumber,
+    playerCount,
     phase: round.phase,
     dealer: round.dealer,
     starter: round.starter,
@@ -922,8 +992,8 @@ function publicRound(round) {
     protectedSuits: round.protectedSuits,
     trickNumber: round.trickNumber,
     lastTrick: round.lastTrick,
-    scorePreview: round.scorePreview,
-    finishedScores: round.finishedScores,
+    scorePreview: Array.isArray(round.scorePreview) ? round.scorePreview.slice(0, playerCount) : zeroScores(playerCount),
+    finishedScores: Array.isArray(round.finishedScores) ? round.finishedScores.slice(0, playerCount) : null,
     pigSeats: round.pigSeats || []
   };
 }
@@ -991,8 +1061,9 @@ function publicMessagesFor(room) {
 }
 
 function startRound(room, options = {}) {
-  if (room.players.length !== 4) {
-    throw new Error("需要 4 位玩家才能开始");
+  const playerCount = getPlayerCount(room);
+  if (room.players.length !== playerCount) {
+    throw new Error(`需要 ${playerCount} 位玩家才能开始`);
   }
   if (room.exposeTimer) {
     clearTimeout(room.exposeTimer);
@@ -1002,10 +1073,10 @@ function startRound(room, options = {}) {
     if (!Number.isFinite(player.pigCount)) player.pigCount = 0;
   });
 
-  const deck = shuffle(makeDeck());
-  const hands = [[], [], [], []];
+  const deck = shuffle(deckForPlayerCount(playerCount));
+  const hands = Array.from({ length: playerCount }, () => []);
   deck.forEach((card, index) => {
-    hands[index % 4].push(card);
+    hands[index % playerCount].push(card);
   });
   hands.forEach(sortHand);
 
@@ -1013,9 +1084,10 @@ function startRound(room, options = {}) {
   room.phase = "playing";
   room.round = {
     handNumber: (room.round?.handNumber || 0) + 1,
+    playerCount,
     phase: "expose",
     hands,
-    taken: [[], [], [], []],
+    taken: Array.from({ length: playerCount }, () => []),
     exposed: {
       SQ: null,
       DJ: null,
@@ -1038,10 +1110,12 @@ function startRound(room, options = {}) {
     trickNumber: 1,
     lastTrick: null,
     heartsSeen: false,
-    scorePreview: [0, 0, 0, 0],
+    scorePreview: zeroScores(playerCount),
     finishedScores: null
   };
-  pushRoundMessage(room, `第 ${room.round.handNumber} 局开始，${room.players[starter].name} 持黑桃 2 先出。`, room.round.handNumber);
+  const removed = REMOVED_CARDS_BY_COUNT[playerCount] || [];
+  const removedText = removed.length ? `（移除 ${removed.map(formatCardId).join("、")}）` : "";
+  pushRoundMessage(room, `第 ${room.round.handNumber} 局开始，${room.players[starter].name} 持黑桃 2 先出${removedText}。`, room.round.handNumber);
 }
 
 function getExposableCardIds(round, seat) {
@@ -1137,7 +1211,8 @@ function playCard(room, seat, cardId, options = {}) {
   if (card.suit === "H") round.heartsSeen = true;
   pushRoundMessage(room, `${room.players[seat].name} 出了 ${formatCard(card)}。`, round.handNumber).trickNumber = round.trickNumber;
 
-  if (round.trick.length === 4) {
+  const playerCount = getRoundPlayerCount(round);
+  if (round.trick.length === playerCount) {
     const settleDelayMs = Math.max(0, Number(options.settleDelayMs || 0));
     if (settleDelayMs > 0) {
       round.pendingTrickResolution = {
@@ -1148,7 +1223,7 @@ function playCard(room, seat, cardId, options = {}) {
       finishTrick(room);
     }
   } else {
-    round.currentPlayer = (round.currentPlayer + 1) % 4;
+    round.currentPlayer = (round.currentPlayer + 1) % playerCount;
   }
   updateScorePreview(round);
 }
@@ -1205,7 +1280,7 @@ function finishRound(room) {
 function getRoundPigSeats(round, scores = calculateScores(round)) {
   const allHeartsSeat = round.taken.findIndex(hasAllHearts);
   if (allHeartsSeat >= 0) {
-    return [0, 1, 2, 3].filter((seat) => seat !== allHeartsSeat);
+    return seatIndexes(getRoundPlayerCount(round)).filter((seat) => seat !== allHeartsSeat);
   }
   const lowest = Math.min(...scores);
   return scores
@@ -1226,8 +1301,9 @@ function scoringCardsFor(cards) {
 }
 
 function calculateScores(round) {
-  const scores = [0, 0, 0, 0];
-  for (let seat = 0; seat < 4; seat += 1) {
+  const playerCount = getRoundPlayerCount(round);
+  const scores = zeroScores(playerCount);
+  for (let seat = 0; seat < playerCount; seat += 1) {
     const cards = round.taken[seat];
     const ids = new Set(cards.map((card) => card.id));
     const hasAllHearts = RANKS.every((rank) => ids.has(`H${rank}`));
