@@ -46,16 +46,40 @@
             <h2 id="phase-title">等待玩家</h2>
           </div>
           <div class="topbar-actions">
-            <label class="scale-control" for="ui-scale">
-              <span id="ui-scale-label">页面缩放</span>
-              <input id="ui-scale" type="range" min="65" max="120" step="5" value="100" />
-              <output id="ui-scale-value">100%</output>
-            </label>
-            <label class="scale-control mobile-page-scale-control" for="mobile-page-scale">
-              <span>页面缩放</span>
-              <input id="mobile-page-scale" type="range" min="80" max="120" step="5" value="100" />
-              <output id="mobile-page-scale-value">100%</output>
-            </label>
+            <div class="settings-shell">
+              <button id="page-settings-button" type="button" class="secondary" aria-expanded="false" aria-controls="page-settings-panel">页面设置</button>
+              <div id="page-settings-panel" class="settings-popover hidden">
+                <label class="scale-control" for="ui-scale">
+                  <span id="ui-scale-label">页面缩放</span>
+                  <input id="ui-scale" type="range" min="65" max="120" step="5" value="100" />
+                  <output id="ui-scale-value">100%</output>
+                </label>
+                <label class="scale-control mobile-page-scale-control" for="mobile-page-scale">
+                  <span>页面缩放</span>
+                  <input id="mobile-page-scale" type="range" min="80" max="120" step="5" value="100" />
+                  <output id="mobile-page-scale-value">100%</output>
+                </label>
+                <label class="scale-control" for="table-size">
+                  <span>牌桌大小</span>
+                  <input id="table-size" type="range" min="85" max="125" step="5" value="100" />
+                  <output id="table-size-value">100%</output>
+                </label>
+                <section class="theme-setting" aria-label="更换牌桌样式">
+                  <span>牌桌样式</span>
+                  <div class="theme-options">
+                    <button type="button" data-table-theme="classic">经典</button>
+                    <button type="button" data-table-theme="star">星纹</button>
+                    <button type="button" data-table-theme="plum">梅花</button>
+                    <button type="button" data-table-theme="bamboo">竹影</button>
+                  </div>
+                </section>
+                <label class="toggle-setting">
+                  <input id="reduced-motion-toggle" type="checkbox" />
+                  <span>减少动画</span>
+                </label>
+                <button id="settings-reset" type="button" class="secondary">恢复默认</button>
+              </div>
+            </div>
             <button id="history-button" type="button" class="secondary">历史</button>
             <button id="rules-button" type="button" class="secondary">规则</button>
             <button id="table-mode-button" type="button" class="secondary">全屏桌面</button>

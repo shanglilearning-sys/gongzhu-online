@@ -11,7 +11,11 @@ const CLIENT_ID_KEY = "gongzhuClientId";
 const DESKTOP_ZOOM_KEY = "gongzhuPageZoomV2";
 const MOBILE_TABLE_SPREAD_KEY = "gongzhuMobileTableSpreadV1";
 const MOBILE_PAGE_ZOOM_KEY = "gongzhuMobilePageZoomV1";
+const TABLE_SIZE_KEY = "gongzhuTableSizeV1";
+const TABLE_THEME_KEY = "gongzhuTableThemeV1";
+const REDUCED_MOTION_KEY = "gongzhuReducedMotionV1";
 const MOBILE_QUERY = window.matchMedia("(max-width: 640px), (pointer: coarse)");
+const TABLE_THEMES = new Set(["classic", "star", "plum", "bamboo"]);
 
 let state = null;
 let selectedExpose = new Set();
@@ -33,11 +37,18 @@ const copyLinkButton = document.querySelector("#copy-link");
 const historyButton = document.querySelector("#history-button");
 const rulesButton = document.querySelector("#rules-button");
 const tableModeButton = document.querySelector("#table-mode-button");
+const pageSettingsButton = document.querySelector("#page-settings-button");
+const pageSettingsPanel = document.querySelector("#page-settings-panel");
 const uiScaleInput = document.querySelector("#ui-scale");
 const uiScaleLabel = document.querySelector("#ui-scale-label");
 const uiScaleValue = document.querySelector("#ui-scale-value");
 const mobilePageScaleInput = document.querySelector("#mobile-page-scale");
 const mobilePageScaleValue = document.querySelector("#mobile-page-scale-value");
+const tableSizeInput = document.querySelector("#table-size");
+const tableSizeValue = document.querySelector("#table-size-value");
+const tableThemeButtons = document.querySelectorAll("[data-table-theme]");
+const reducedMotionToggle = document.querySelector("#reduced-motion-toggle");
+const settingsResetButton = document.querySelector("#settings-reset");
 const scoreStrip = document.querySelector("#score-strip");
 const trickArea = document.querySelector("#trick-area");
 const statusLine = document.querySelector("#status-line");
@@ -70,6 +81,9 @@ if (params.get("room")) {
 nameInput.value = localStorage.getItem("gongzhuName") || "";
 applyUiScale(getSavedUiScale());
 applyMobilePageScale(getSavedMobilePageScale());
+applyTableSize(getSavedTableSize());
+applyTableTheme(getSavedTableTheme());
+applyReducedMotion(getSavedReducedMotion());
 
 createButton.addEventListener("click", () => {
   const name = getName();
@@ -123,6 +137,23 @@ rulesButton.addEventListener("click", () => {
   openRules();
 });
 
+pageSettingsButton?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setSettingsOpen(pageSettingsPanel?.classList.contains("hidden"));
+});
+
+pageSettingsPanel?.addEventListener("click", (event) => {
+  event.stopPropagation();
+});
+
+document.addEventListener("click", () => {
+  setSettingsOpen(false);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setSettingsOpen(false);
+});
+
 tableModeButton.addEventListener("click", toggleTableMode);
 document.addEventListener("fullscreenchange", () => {
   if (!document.fullscreenElement && tableModeEnabled) {
@@ -160,6 +191,43 @@ mobilePageScaleInput?.addEventListener("input", () => {
   const value = clampMobilePageScale(mobilePageScaleInput.value);
   localStorage.setItem(MOBILE_PAGE_ZOOM_KEY, String(value));
   applyMobilePageScale(value);
+  renderSlots();
+  renderTrick();
+});
+
+tableSizeInput?.addEventListener("input", () => {
+  const value = clampTableSize(tableSizeInput.value);
+  localStorage.setItem(TABLE_SIZE_KEY, String(value));
+  applyTableSize(value);
+  renderSlots();
+  renderTrick();
+});
+
+tableThemeButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const theme = normalizeTableTheme(button.dataset.tableTheme);
+    localStorage.setItem(TABLE_THEME_KEY, theme);
+    applyTableTheme(theme);
+  });
+});
+
+reducedMotionToggle?.addEventListener("change", () => {
+  const enabled = Boolean(reducedMotionToggle.checked);
+  localStorage.setItem(REDUCED_MOTION_KEY, enabled ? "1" : "0");
+  applyReducedMotion(enabled);
+});
+
+settingsResetButton?.addEventListener("click", () => {
+  localStorage.setItem(activeScaleKey(), "100");
+  localStorage.setItem(MOBILE_PAGE_ZOOM_KEY, "100");
+  localStorage.setItem(TABLE_SIZE_KEY, "100");
+  localStorage.setItem(TABLE_THEME_KEY, "classic");
+  localStorage.setItem(REDUCED_MOTION_KEY, "0");
+  applyUiScale(100);
+  applyMobilePageScale(100);
+  applyTableSize(100);
+  applyTableTheme("classic");
+  applyReducedMotion(false);
   renderSlots();
   renderTrick();
 });
@@ -247,6 +315,18 @@ function getSavedMobilePageScale() {
   return clampMobilePageScale(localStorage.getItem(MOBILE_PAGE_ZOOM_KEY) || defaultPageZoom());
 }
 
+function getSavedTableSize() {
+  return clampTableSize(localStorage.getItem(TABLE_SIZE_KEY) || defaultPageZoom());
+}
+
+function getSavedTableTheme() {
+  return normalizeTableTheme(localStorage.getItem(TABLE_THEME_KEY));
+}
+
+function getSavedReducedMotion() {
+  return localStorage.getItem(REDUCED_MOTION_KEY) === "1";
+}
+
 function defaultPageZoom() {
   return 100;
 }
@@ -265,6 +345,10 @@ function mobilePageScaleBounds() {
   return { min: 80, max: 120 };
 }
 
+function tableSizeBounds() {
+  return { min: 85, max: 125 };
+}
+
 function clampScale(value) {
   const { min, max } = scaleBounds();
   const numeric = Number.parseInt(value, 10);
@@ -279,10 +363,16 @@ function clampMobilePageScale(value) {
   return Math.min(max, Math.max(min, numeric));
 }
 
+function clampTableSize(value) {
+  const { min, max } = tableSizeBounds();
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isFinite(numeric)) return 100;
+  return Math.min(max, Math.max(min, numeric));
+}
+
 function applyUiScale(value) {
   const scale = clampScale(value);
   const isMobile = MOBILE_QUERY.matches;
-  document.documentElement.style.setProperty("--ui-scale", "1");
   document.documentElement.style.setProperty("--mobile-seat-spread", isMobile ? String(scale / 100) : "1");
   if (!isMobile) {
     document.documentElement.style.setProperty("--page-zoom", String(scale / 100));
@@ -307,6 +397,28 @@ function applyMobilePageScale(value) {
   updateMobilePageScaleControlBounds();
 }
 
+function applyTableSize(value) {
+  const scale = clampTableSize(value);
+  document.documentElement.style.setProperty("--ui-scale", String(scale / 100));
+  if (tableSizeInput) tableSizeInput.value = String(scale);
+  if (tableSizeValue) tableSizeValue.textContent = `${scale}%`;
+  updateTableSizeControlBounds();
+}
+
+function applyTableTheme(value) {
+  const theme = normalizeTableTheme(value);
+  game.dataset.tableTheme = theme;
+  tableThemeButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.tableTheme === theme);
+    button.setAttribute("aria-pressed", button.dataset.tableTheme === theme ? "true" : "false");
+  });
+}
+
+function applyReducedMotion(enabled) {
+  document.body.classList.toggle("reduced-motion", Boolean(enabled));
+  if (reducedMotionToggle) reducedMotionToggle.checked = Boolean(enabled);
+}
+
 function updateScaleControlBounds() {
   if (!uiScaleInput) return;
   const { min, max } = scaleBounds();
@@ -321,6 +433,24 @@ function updateMobilePageScaleControlBounds() {
   mobilePageScaleInput.min = String(min);
   mobilePageScaleInput.max = String(max);
   mobilePageScaleInput.step = "5";
+}
+
+function updateTableSizeControlBounds() {
+  if (!tableSizeInput) return;
+  const { min, max } = tableSizeBounds();
+  tableSizeInput.min = String(min);
+  tableSizeInput.max = String(max);
+  tableSizeInput.step = "5";
+}
+
+function normalizeTableTheme(value) {
+  return TABLE_THEMES.has(value) ? value : "classic";
+}
+
+function setSettingsOpen(open) {
+  if (!pageSettingsPanel || !pageSettingsButton) return;
+  pageSettingsPanel.classList.toggle("hidden", !open);
+  pageSettingsButton.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
 function getSelectedPlayerCount() {
