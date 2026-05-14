@@ -9,7 +9,7 @@ const SPECIAL_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
 const CLIENT_ID_KEY = "gongzhuClientId";
 const DESKTOP_ZOOM_KEY = "gongzhuPageZoomV2";
-const MOBILE_PLAY_SCALE_KEY = "gongzhuMobilePlayScaleV1";
+const MOBILE_TABLE_SPREAD_KEY = "gongzhuMobileTableSpreadV1";
 const MOBILE_QUERY = window.matchMedia("(max-width: 640px), (pointer: coarse)");
 
 let state = null;
@@ -227,11 +227,11 @@ function getSavedUiScale() {
 }
 
 function defaultPageZoom() {
-  return MOBILE_QUERY.matches ? 70 : 100;
+  return 100;
 }
 
 function activeScaleKey() {
-  return MOBILE_QUERY.matches ? MOBILE_PLAY_SCALE_KEY : DESKTOP_ZOOM_KEY;
+  return MOBILE_QUERY.matches ? MOBILE_TABLE_SPREAD_KEY : DESKTOP_ZOOM_KEY;
 }
 
 function scaleBounds() {
@@ -250,7 +250,8 @@ function clampScale(value) {
 function applyUiScale(value) {
   const scale = clampScale(value);
   const isMobile = MOBILE_QUERY.matches;
-  document.documentElement.style.setProperty("--ui-scale", isMobile ? String(scale / 100) : "1");
+  document.documentElement.style.setProperty("--ui-scale", "1");
+  document.documentElement.style.setProperty("--mobile-seat-spread", isMobile ? String(scale / 100) : "1");
   document.documentElement.style.setProperty("--page-zoom", isMobile ? "1" : String(scale / 100));
   document.body.classList.toggle("page-zoom-active", !isMobile && scale !== 100);
   if (uiScaleInput) uiScaleInput.value = String(scale);
@@ -346,7 +347,10 @@ function renderScores() {
   for (const seat of orderedSeatsForView()) {
     const player = state.players[seat];
     const currentScore = currentRoundScore(seat);
-    const pigMarks = renderPigMarks(player?.pigCount || 0, { compact: true });
+    const pigCount = Math.max(0, Number.parseInt(player?.pigCount || 0, 10));
+    const pigMarks = renderPigMarks(pigCount, { compact: true });
+    const pigTitle = pigCount > 3 ? `<span class="score-pig-title">猪王</span>` : "";
+    const pigText = player ? `当猪 ${pigCount} 局${pigTitle}` : "等待加入";
     const card = document.createElement("div");
     card.className = "score-card";
     if (state.round?.currentPlayer === seat) card.classList.add("active");
@@ -363,7 +367,7 @@ function renderScores() {
         ${pigMarks}
         <strong>${formatScore(currentScore)}</strong>
       </div>
-      <div class="meta">${player ? `当前分数 ${formatScore(currentScore)}` : "等待加入"}</div>
+      <div class="meta">${player ? `当前分数 ${formatScore(currentScore)} · ${pigText}` : "等待加入"}</div>
     `;
     scoreStrip.appendChild(card);
   }
@@ -384,10 +388,8 @@ function renderSlots() {
     slot.style.setProperty("--seat-y", `${point.y}%`);
     const player = state.players[seat];
     const currentScore = currentRoundScore(seat);
-    const pigCount = Math.max(0, Number.parseInt(player?.pigCount || 0, 10));
-    const pigTitle = pigCount > 3 ? `<span class="slot-pig-title">猪王</span>` : "";
     const slotMeta = player
-      ? `<span>当前分数 ${formatScore(currentScore)}</span><span>当猪 ${pigCount} 局${pigTitle}</span>`
+      ? `<span>当前分数 ${formatScore(currentScore)}</span>`
       : "等待加入";
     slot.classList.toggle("current", state.round?.currentPlayer === seat);
     slot.classList.toggle("me", state.me?.seat === seat);
@@ -604,10 +606,11 @@ function slotPoint(index, count) {
   const angle = (Math.PI / 2) + (Math.PI * 2 * index / count);
   const xRadius = count === 5 ? 43 : 41;
   const yRadius = tableModeEnabled ? 43 : (index === 0 ? 37 : 39);
+  const spread = mobileSeatSpread();
   const mobileSeatMaps = {
-    3: [{ x: 50, y: 86 }, { x: 81, y: 42 }, { x: 19, y: 42 }],
-    4: [{ x: 50, y: 86 }, { x: 81, y: 50 }, { x: 50, y: 15 }, { x: 19, y: 50 }],
-    5: [{ x: 50, y: 86 }, { x: 81, y: 64 }, { x: 70, y: 16 }, { x: 30, y: 16 }, { x: 19, y: 64 }]
+    3: [{ x: 50, y: 86 }, { x: 72 + 11 * spread, y: 42 }, { x: 28 - 11 * spread, y: 42 }],
+    4: [{ x: 50, y: 86 }, { x: 72 + 11 * spread, y: 50 }, { x: 50, y: 15 }, { x: 28 - 11 * spread, y: 50 }],
+    5: [{ x: 50, y: 86 }, { x: 72 + 11 * spread, y: 64 }, { x: 70, y: 16 }, { x: 30, y: 16 }, { x: 28 - 11 * spread, y: 64 }]
   };
   if (MOBILE_QUERY.matches && mobileSeatMaps[count]?.[index]) {
     return mobileSeatMaps[count][index];
@@ -616,6 +619,13 @@ function slotPoint(index, count) {
     x: 50 + Math.cos(angle) * xRadius,
     y: 50 + Math.sin(angle) * yRadius
   };
+}
+
+function mobileSeatSpread() {
+  if (!MOBILE_QUERY.matches) return 1;
+  const value = Number.parseInt(uiScaleInput?.value || defaultPageZoom(), 10);
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(1, Math.max(0, (value - 50) / 50));
 }
 
 function renderPigMarks(count, options = {}) {
