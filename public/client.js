@@ -10,6 +10,7 @@ const RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K",
 const CLIENT_ID_KEY = "gongzhuClientId";
 const DESKTOP_ZOOM_KEY = "gongzhuPageZoomV2";
 const MOBILE_TABLE_SPREAD_KEY = "gongzhuMobileTableSpreadV1";
+const MOBILE_PAGE_ZOOM_KEY = "gongzhuMobilePageZoomV1";
 const MOBILE_QUERY = window.matchMedia("(max-width: 640px), (pointer: coarse)");
 
 let state = null;
@@ -35,6 +36,8 @@ const tableModeButton = document.querySelector("#table-mode-button");
 const uiScaleInput = document.querySelector("#ui-scale");
 const uiScaleLabel = document.querySelector("#ui-scale-label");
 const uiScaleValue = document.querySelector("#ui-scale-value");
+const mobilePageScaleInput = document.querySelector("#mobile-page-scale");
+const mobilePageScaleValue = document.querySelector("#mobile-page-scale-value");
 const scoreStrip = document.querySelector("#score-strip");
 const trickArea = document.querySelector("#trick-area");
 const statusLine = document.querySelector("#status-line");
@@ -66,6 +69,7 @@ if (params.get("room")) {
 
 nameInput.value = localStorage.getItem("gongzhuName") || "";
 applyUiScale(getSavedUiScale());
+applyMobilePageScale(getSavedMobilePageScale());
 
 createButton.addEventListener("click", () => {
   const name = getName();
@@ -152,6 +156,14 @@ uiScaleInput?.addEventListener("input", () => {
   renderTrick();
 });
 
+mobilePageScaleInput?.addEventListener("input", () => {
+  const value = clampMobilePageScale(mobilePageScaleInput.value);
+  localStorage.setItem(MOBILE_PAGE_ZOOM_KEY, String(value));
+  applyMobilePageScale(value);
+  renderSlots();
+  renderTrick();
+});
+
 window.addEventListener("resize", () => {
   renderSlots();
   renderTrick();
@@ -166,6 +178,7 @@ screen.orientation?.addEventListener?.("change", () => {
 MOBILE_QUERY.addEventListener?.("change", () => {
   updateTableModeAvailability();
   applyUiScale(getSavedUiScale());
+  applyMobilePageScale(getSavedMobilePageScale());
   renderSlots();
   renderTrick();
 });
@@ -230,6 +243,10 @@ function getSavedUiScale() {
   return clampScale(localStorage.getItem(activeScaleKey()) || defaultPageZoom());
 }
 
+function getSavedMobilePageScale() {
+  return clampMobilePageScale(localStorage.getItem(MOBILE_PAGE_ZOOM_KEY) || defaultPageZoom());
+}
+
 function defaultPageZoom() {
   return 100;
 }
@@ -240,12 +257,23 @@ function activeScaleKey() {
 
 function scaleBounds() {
   return MOBILE_QUERY.matches
-    ? { min: 90, max: 120 }
+    ? { min: 90, max: 170 }
     : { min: 65, max: 120 };
+}
+
+function mobilePageScaleBounds() {
+  return { min: 80, max: 120 };
 }
 
 function clampScale(value) {
   const { min, max } = scaleBounds();
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isFinite(numeric)) return 100;
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function clampMobilePageScale(value) {
+  const { min, max } = mobilePageScaleBounds();
   const numeric = Number.parseInt(value, 10);
   if (!Number.isFinite(numeric)) return 100;
   return Math.min(max, Math.max(min, numeric));
@@ -256,12 +284,27 @@ function applyUiScale(value) {
   const isMobile = MOBILE_QUERY.matches;
   document.documentElement.style.setProperty("--ui-scale", "1");
   document.documentElement.style.setProperty("--mobile-seat-spread", isMobile ? String(scale / 100) : "1");
-  document.documentElement.style.setProperty("--page-zoom", isMobile ? "1" : String(scale / 100));
+  if (!isMobile) {
+    document.documentElement.style.setProperty("--page-zoom", String(scale / 100));
+  }
   document.body.classList.toggle("page-zoom-active", !isMobile && scale !== 100);
   if (uiScaleInput) uiScaleInput.value = String(scale);
   if (uiScaleValue) uiScaleValue.textContent = `${scale}%`;
-  if (uiScaleLabel) uiScaleLabel.textContent = isMobile ? "牌桌缩放" : "页面缩放";
+  if (uiScaleLabel) uiScaleLabel.textContent = isMobile ? "对家距离" : "页面缩放";
   updateScaleControlBounds();
+}
+
+function applyMobilePageScale(value) {
+  const scale = clampMobilePageScale(value);
+  const isMobile = MOBILE_QUERY.matches;
+  if (isMobile) {
+    document.documentElement.style.setProperty("--page-zoom", String(scale / 100));
+  }
+  document.documentElement.style.setProperty("--mobile-page-zoom", String(scale / 100));
+  document.body.classList.toggle("mobile-page-zoom-active", isMobile && scale !== 100);
+  if (mobilePageScaleInput) mobilePageScaleInput.value = String(scale);
+  if (mobilePageScaleValue) mobilePageScaleValue.textContent = `${scale}%`;
+  updateMobilePageScaleControlBounds();
 }
 
 function updateScaleControlBounds() {
@@ -270,6 +313,14 @@ function updateScaleControlBounds() {
   uiScaleInput.min = String(min);
   uiScaleInput.max = String(max);
   uiScaleInput.step = "5";
+}
+
+function updateMobilePageScaleControlBounds() {
+  if (!mobilePageScaleInput) return;
+  const { min, max } = mobilePageScaleBounds();
+  mobilePageScaleInput.min = String(min);
+  mobilePageScaleInput.max = String(max);
+  mobilePageScaleInput.step = "5";
 }
 
 function getSelectedPlayerCount() {
@@ -383,6 +434,7 @@ function renderSlots() {
   renderTableExposedBadge();
   const seats = orderedSeatsForView();
   playerSlots.innerHTML = "";
+  renderSelfCornerSlot();
   seats.forEach((seat, index) => {
     if (seat === state.me?.seat) return;
     const slot = document.createElement("div");
@@ -432,6 +484,38 @@ function renderSlots() {
     });
     playerSlots.appendChild(slot);
   });
+}
+
+function renderSelfCornerSlot() {
+  if (!playerSlots) return;
+  playerSlots.querySelector(".self-corner-slot")?.remove();
+  const seat = state?.me?.seat;
+  const player = Number.isInteger(seat) ? state.players[seat] : null;
+  if (!player) return;
+  const slot = document.createElement("div");
+  slot.className = "player-slot self-corner-slot me";
+  if (state.round?.currentPlayer === seat) slot.classList.add("current");
+  if (player.connected === false) slot.classList.add("offline");
+  slot.dataset.seat = String(seat);
+  slot.dataset.selfCorner = "true";
+  slot.title = "查看本轮分牌";
+  slot.tabIndex = 0;
+  slot.onclick = () => openScoreCards(seat);
+  slot.onkeydown = (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openScoreCards(seat);
+    }
+  };
+  slot.innerHTML = `
+    <div class="slot-top">
+      <span class="slot-seat">${player.directionLabel || seat + 1}</span>
+      <span class="slot-name">${escapeHtml(player.name || "我")}</span>
+    </div>
+    <div class="slot-meta"><span>当前分数 ${formatScore(currentRoundScore(seat))}</span></div>
+    ${player.connected === false ? `<div class="slot-alert">断线</div>` : ""}
+  `;
+  playerSlots.appendChild(slot);
 }
 
 function renderTableExposedBadge() {
@@ -692,7 +776,9 @@ function mobileSeatSpread() {
   if (!MOBILE_QUERY.matches) return 1;
   const value = Number.parseInt(uiScaleInput?.value || defaultPageZoom(), 10);
   if (!Number.isFinite(value)) return 1;
-  return Math.min(1, Math.max(0, (value - 90) / 30));
+  const base = Math.min(1, Math.max(0, (value - 90) / 30));
+  const extra = value > 120 ? Math.min(0.4, (value - 120) / 125) : 0;
+  return base + extra;
 }
 
 function renderPigMarks(count, options = {}) {

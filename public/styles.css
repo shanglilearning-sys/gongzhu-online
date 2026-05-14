@@ -20,6 +20,7 @@
   --ui-scale: 1;
   --page-zoom: 1;
   --mobile-seat-spread: 1;
+  --mobile-page-zoom: 1;
   --card-w: calc(70px * var(--ui-scale));
   --card-h: calc(100px * var(--ui-scale));
   --small-card-w: calc(58px * var(--ui-scale));
@@ -220,6 +221,10 @@ select:focus {
   color: #f5d985;
 }
 
+.mobile-page-scale-control {
+  display: none;
+}
+
 .error {
   min-height: 20px;
   margin: 0;
@@ -249,6 +254,18 @@ body.page-zoom-active:not(.table-mode-active) .game-screen:not(.hidden) {
 }
 
 body.page-zoom-active:not(.table-mode-active) {
+  min-height: calc(100svh / var(--page-zoom));
+}
+
+body.mobile-page-zoom-active:not(.table-mode-active) .game-screen:not(.hidden) {
+  width: max(100vw, calc(100vw / var(--page-zoom)));
+  min-width: max(390px, calc(100vw / var(--page-zoom)));
+  min-height: calc(100svh / var(--page-zoom));
+  transform: scale(var(--page-zoom));
+  transform-origin: top left;
+}
+
+body.mobile-page-zoom-active:not(.table-mode-active) {
   min-height: calc(100svh / var(--page-zoom));
 }
 
@@ -824,6 +841,15 @@ body.table-mode-active {
   left: var(--seat-x, 50%);
   top: var(--seat-y, 50%);
   transform: translate(-50%, -50%);
+}
+
+.self-corner-slot {
+  left: 12px;
+  top: auto;
+  bottom: 12px;
+  width: clamp(138px, calc(158px * var(--ui-scale)), 178px);
+  min-height: calc(66px * var(--ui-scale));
+  transform: none;
 }
 
 .slot-top {
@@ -1535,6 +1561,10 @@ body.table-mode-active {
     min-width: 390px;
   }
 
+  .mobile-page-scale-control {
+    display: grid;
+  }
+
   .topbar {
     min-height: 82px;
     padding: 12px;
@@ -1680,6 +1710,13 @@ body.table-mode-active {
     gap: 2px;
   }
 
+  .self-corner-slot {
+    left: 8px;
+    bottom: 8px;
+    width: 104px;
+    min-height: 50px;
+  }
+
   .table-exposed-badge {
     right: 9px;
     bottom: 9px;
@@ -1778,6 +1815,12 @@ body.table-mode-active {
 
   .game-screen.table-mode .player-slot {
     width: clamp(112px, calc(124px * var(--ui-scale)), 138px);
+  }
+
+  .game-screen.table-mode .self-corner-slot {
+    left: 8px;
+    bottom: 8px;
+    width: 112px;
   }
 
   .game-screen.table-mode .table-exposed-badge {
