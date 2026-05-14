@@ -87,6 +87,7 @@ function connectClient(url) {
 }
 
 async function main() {
+  await testEntryHidesSpectatorPasswordField();
   await testProcessRestartRestore();
   await testEmptyPlayingRoomGracePeriod();
   await testStartRequiresConnectedPlayers();
@@ -95,6 +96,13 @@ async function main() {
   await testPlayerCountModes();
   await testSurrenderVoteFlow();
   await testFullGameFlow();
+}
+
+async function testEntryHidesSpectatorPasswordField() {
+  const html = await fs.readFile(path.join(__dirname, "..", "public", "index.html"), "utf8");
+  assert.equal(html.includes("spectator-password-input"), false);
+  assert.equal(html.includes("观众密码"), false);
+  console.log("entry spectator password hidden ok");
 }
 
 async function testProcessRestartRestore() {

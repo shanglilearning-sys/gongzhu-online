@@ -26,7 +26,6 @@ const game = document.querySelector("#game");
 const joinForm = document.querySelector("#join-form");
 const nameInput = document.querySelector("#name-input");
 const codeInput = document.querySelector("#code-input");
-const spectatorPasswordInput = document.querySelector("#spectator-password-input");
 const createButton = document.querySelector("#create-button");
 const modeSelect = document.querySelector("#mode-select");
 const entryError = document.querySelector("#entry-error");
@@ -99,7 +98,7 @@ joinForm.addEventListener("submit", (event) => {
     entryError.textContent = "请输入房间码，或者点击创建房间。";
     return;
   }
-  socket.emit("joinRoom", { code, name: getName(), clientId, spectatorPassword: getSpectatorPassword() }, handleJoinResponse);
+  joinRoomWithOptionalSpectatorPassword(code);
 });
 
 startButton.addEventListener("click", () => {
@@ -284,7 +283,7 @@ socket.on("kicked", ({ message } = {}) => {
 socket.on("connect", () => {
   if (!state?.code || resumeInFlight) return;
   resumeInFlight = true;
-  socket.emit("joinRoom", { code: state.code, name: getName(), clientId, spectatorPassword: getSpectatorPassword() }, (response) => {
+  socket.emit("joinRoom", { code: state.code, name: getName(), clientId }, (response) => {
     resumeInFlight = false;
     if (!response?.ok) {
       statusLine.textContent = roomErrorMessage(response?.error || "重连房间失败，请刷新后重新加入");
@@ -312,10 +311,6 @@ function getName() {
   const name = nameInput.value.trim() || "玩家";
   localStorage.setItem("gongzhuName", name);
   return name;
-}
-
-function getSpectatorPassword() {
-  return spectatorPasswordInput?.value.trim() || "";
 }
 
 function getClientId() {
@@ -494,6 +489,29 @@ function handleJoinResponse(response) {
   if (response.code) {
     window.history.replaceState(null, "", `?room=${response.code}`);
   }
+}
+
+function joinRoomWithOptionalSpectatorPassword(code, spectatorPassword = "") {
+  socket.emit("joinRoom", { code, name: getName(), clientId, spectatorPassword }, (response) => {
+    if (response?.ok || spectatorPassword || !isSpectatorPasswordError(response?.error)) {
+      handleJoinResponse(response);
+      return;
+    }
+    if (!window.confirm("房间人数已满或牌局已经开始，是否成为观众？")) {
+      entryError.textContent = "房间人数已满。";
+      return;
+    }
+    const password = window.prompt("请输入观众密码");
+    if (password === null) {
+      entryError.textContent = "已取消观众进入。";
+      return;
+    }
+    joinRoomWithOptionalSpectatorPassword(code, password.trim());
+  });
+}
+
+function isSpectatorPasswordError(message) {
+  return String(message || "").includes("观众需要输入正确密码");
 }
 
 function roomErrorMessage(message) {
