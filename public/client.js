@@ -471,8 +471,13 @@ function renderTrick() {
     statusLine.innerHTML = `<span class="countdown-pill">卖牌倒计时 <strong>${exposeCountdownSeconds()}</strong> 秒</span>`;
   } else if (phase === "finished") {
     statusLine.textContent = "房主可以开始下一局";
+  } else if (state.phase === "lobby") {
+    statusLine.textContent = "等待开局";
+  } else if (phase === "play") {
+    const currentPlayer = state.players[state.round?.currentPlayer]?.name || "其他玩家";
+    statusLine.textContent = `等待 ${currentPlayer} 出牌`;
   } else {
-    statusLine.textContent = "";
+    statusLine.textContent = "牌局准备中";
   }
 
   if (state.round?.lastTrick) {

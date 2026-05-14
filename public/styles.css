@@ -629,6 +629,7 @@ body.table-mode-active {
 }
 
 .trick-area {
+  grid-row: 2;
   width: min(calc(420px * var(--ui-scale)), 52vw);
   min-height: calc(240px * var(--ui-scale));
   position: relative;
@@ -644,6 +645,9 @@ body.table-mode-active {
 }
 
 .status-line {
+  grid-row: 1;
+  position: relative;
+  z-index: 5;
   min-height: 32px;
   max-width: min(420px, 100%);
   border: 1px solid rgba(255, 238, 202, 0.18);
@@ -691,6 +695,7 @@ body.table-mode-active {
 }
 
 .last-trick {
+  grid-row: 3;
   min-height: 34px;
   max-width: min(520px, 100%);
   color: rgba(255, 255, 255, 0.76);
@@ -1574,10 +1579,18 @@ body.table-mode-active {
   }
 
   .status-line {
-    min-height: 28px;
-    max-width: 230px;
-    padding: 5px 10px;
+    position: absolute;
+    left: 50%;
+    top: 30%;
+    z-index: 6;
+    width: max-content;
+    min-width: 132px;
+    min-height: 30px;
+    max-width: min(248px, calc(100vw - 116px));
+    padding: 6px 12px;
     font-size: 12px;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
   }
 
   .last-trick {
