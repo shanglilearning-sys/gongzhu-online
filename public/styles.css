@@ -240,8 +240,8 @@ select:focus {
 }
 
 body.page-zoom-active:not(.table-mode-active) .game-screen:not(.hidden) {
-  width: calc(100vw / var(--page-zoom));
-  min-width: calc(100vw / var(--page-zoom));
+  width: max(100vw, calc(100vw / var(--page-zoom)));
+  min-width: max(100vw, calc(100vw / var(--page-zoom)));
   min-height: calc(100svh / var(--page-zoom));
   transform: scale(var(--page-zoom));
   transform-origin: top left;
@@ -1443,9 +1443,15 @@ body.table-mode-active {
   }
 
   .game-screen {
+    min-width: 430px;
     padding: 8px;
     gap: 8px;
-    grid-template-rows: auto auto minmax(410px, 50svh) auto auto;
+    grid-template-rows: auto auto minmax(500px, 62svh) auto auto;
+  }
+
+  body.page-zoom-active:not(.table-mode-active) .game-screen:not(.hidden) {
+    width: max(430px, 118vw, calc(100vw / var(--page-zoom)));
+    min-width: max(430px, 118vw, calc(100vw / var(--page-zoom)));
   }
 
   .topbar {
@@ -1538,7 +1544,7 @@ body.table-mode-active {
   }
 
   .table-wrap {
-    min-height: clamp(390px, calc(410px * var(--ui-scale)), 470px);
+    min-height: clamp(500px, 62svh, 620px);
     border-width: 7px;
   }
 

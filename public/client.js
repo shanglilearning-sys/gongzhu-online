@@ -8,7 +8,7 @@ const SUIT_NAMES = { S: "黑桃", H: "红桃", D: "方块", C: "梅花" };
 const SPECIAL_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
 const CLIENT_ID_KEY = "gongzhuClientId";
-const UI_SCALE_KEY = "gongzhuPageZoom";
+const UI_SCALE_KEY = "gongzhuPageZoomV2";
 const MOBILE_QUERY = window.matchMedia("(max-width: 640px), (pointer: coarse)");
 
 let state = null;
@@ -220,7 +220,11 @@ function getClientId() {
 }
 
 function getSavedUiScale() {
-  return clampScale(localStorage.getItem(UI_SCALE_KEY) || "100");
+  return clampScale(localStorage.getItem(UI_SCALE_KEY) || defaultPageZoom());
+}
+
+function defaultPageZoom() {
+  return MOBILE_QUERY.matches ? 85 : 100;
 }
 
 function clampScale(value) {
@@ -576,9 +580,9 @@ function slotPoint(index, count) {
   const xRadius = count === 5 ? 43 : 41;
   const yRadius = tableModeEnabled ? 43 : (index === 0 ? 37 : 39);
   const mobileSeatMaps = {
-    3: [{ x: 50, y: 84 }, { x: 76, y: 42 }, { x: 24, y: 42 }],
-    4: [{ x: 50, y: 84 }, { x: 76, y: 50 }, { x: 50, y: 16 }, { x: 24, y: 50 }],
-    5: [{ x: 50, y: 84 }, { x: 76, y: 63 }, { x: 70, y: 18 }, { x: 30, y: 18 }, { x: 24, y: 63 }]
+    3: [{ x: 50, y: 86 }, { x: 81, y: 42 }, { x: 19, y: 42 }],
+    4: [{ x: 50, y: 86 }, { x: 81, y: 50 }, { x: 50, y: 15 }, { x: 19, y: 50 }],
+    5: [{ x: 50, y: 86 }, { x: 81, y: 64 }, { x: 70, y: 16 }, { x: 30, y: 16 }, { x: 19, y: 64 }]
   };
   if (MOBILE_QUERY.matches && mobileSeatMaps[count]?.[index]) {
     return mobileSeatMaps[count][index];
@@ -752,13 +756,12 @@ function showReaction(reaction) {
   const fromSlot = document.querySelector(`.player-slot[data-seat="${reaction?.fromSeat}"]`);
   const targetSlot = document.querySelector(`.player-slot[data-seat="${reaction?.targetSeat}"]`);
   if (!fromSlot || !targetSlot || !reaction?.kind) return;
-  const tableRect = tableWrap.getBoundingClientRect();
-  const fromRect = fromSlot.getBoundingClientRect();
-  const targetRect = targetSlot.getBoundingClientRect();
-  const startX = fromRect.left + fromRect.width / 2 - tableRect.left;
-  const startY = fromRect.top + fromRect.height / 2 - tableRect.top;
-  const endX = targetRect.left + targetRect.width / 2 - tableRect.left;
-  const endY = targetRect.top + targetRect.height / 2 - tableRect.top;
+  const fromPoint = slotAnchorPoint(fromSlot);
+  const targetPoint = slotAnchorPoint(targetSlot);
+  const startX = fromPoint.x;
+  const startY = fromPoint.y;
+  const endX = targetPoint.x;
+  const endY = targetPoint.y;
   const lift = Math.max(70, Math.min(170, Math.hypot(endX - startX, endY - startY) * 0.28));
   const drift = (Math.random() - 0.5) * 110;
   const item = document.createElement("div");
@@ -773,6 +776,24 @@ function showReaction(reaction) {
   item.style.setProperty("--to-y", `${endY}px`);
   tableWrap.appendChild(item);
   setTimeout(() => item.remove(), 1150);
+}
+
+function slotAnchorPoint(slot) {
+  const xPercent = Number.parseFloat(slot.style.getPropertyValue("--seat-x"));
+  const yPercent = Number.parseFloat(slot.style.getPropertyValue("--seat-y"));
+  if (Number.isFinite(xPercent) && Number.isFinite(yPercent)) {
+    return {
+      x: tableWrap.clientWidth * xPercent / 100,
+      y: tableWrap.clientHeight * yPercent / 100
+    };
+  }
+  const zoom = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--page-zoom")) || 1;
+  const tableRect = tableWrap.getBoundingClientRect();
+  const slotRect = slot.getBoundingClientRect();
+  return {
+    x: (slotRect.left + slotRect.width / 2 - tableRect.left) / zoom,
+    y: (slotRect.top + slotRect.height / 2 - tableRect.top) / zoom
+  };
 }
 
 function openScoreCards(seat) {
