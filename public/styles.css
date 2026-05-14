@@ -637,13 +637,9 @@ body.table-mode-active {
 
 .played-card {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  transform:
-    translate(-50%, -50%)
-    rotate(var(--angle, 90deg))
-    translateY(calc(86px * var(--ui-scale)))
-    rotate(calc(-1 * var(--angle, 90deg)));
+  left: var(--play-x, 50%);
+  top: var(--play-y, 50%);
+  transform: translate(-50%, -50%);
   animation: trickPop 320ms cubic-bezier(0.2, 0.9, 0.28, 1.2);
 }
 
@@ -1439,7 +1435,7 @@ body.table-mode-active {
     --card-h: 70px;
     --small-card-w: 41px;
     --small-card-h: 58px;
-    --slot-w: 104px;
+    --slot-w: 114px;
     --slot-pad: 5px;
     --table-inset-y: 58px;
     --table-inset-x: 34px;
@@ -1457,7 +1453,7 @@ body.table-mode-active {
     min-width: 390px;
     padding: 10px;
     gap: 10px;
-    grid-template-rows: auto auto minmax(470px, 58svh) auto auto;
+    grid-template-rows: auto auto minmax(400px, 54svh) auto auto;
   }
 
   body.page-zoom-active:not(.table-mode-active) .game-screen:not(.hidden) {
@@ -1555,7 +1551,7 @@ body.table-mode-active {
   }
 
   .table-wrap {
-    min-height: clamp(470px, 58svh, 600px);
+    min-height: clamp(400px, 54svh, 560px);
     border-width: 7px;
   }
 
@@ -1568,13 +1564,13 @@ body.table-mode-active {
       var(--table-inset-y)
       var(--table-inset-x)
       58px;
-    grid-template-rows: auto minmax(230px, 1fr) auto;
+    grid-template-rows: auto minmax(190px, 1fr) auto;
     gap: 8px;
   }
 
   .trick-area {
     width: min(300px, 76vw);
-    min-height: 252px;
+    min-height: 222px;
   }
 
   .status-line {

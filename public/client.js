@@ -149,21 +149,25 @@ uiScaleInput?.addEventListener("input", () => {
   localStorage.setItem(activeScaleKey(), String(value));
   applyUiScale(value);
   renderSlots();
+  renderTrick();
 });
 
 window.addEventListener("resize", () => {
   renderSlots();
+  renderTrick();
 });
 
 screen.orientation?.addEventListener?.("change", () => {
   updateTableModeAvailability();
   renderSlots();
+  renderTrick();
 });
 
 MOBILE_QUERY.addEventListener?.("change", () => {
   updateTableModeAvailability();
   applyUiScale(getSavedUiScale());
   renderSlots();
+  renderTrick();
 });
 
 socket.on("state", (nextState) => {
@@ -236,7 +240,7 @@ function activeScaleKey() {
 
 function scaleBounds() {
   return MOBILE_QUERY.matches
-    ? { min: 50, max: 120 }
+    ? { min: 90, max: 120 }
     : { min: 65, max: 120 };
 }
 
@@ -445,12 +449,15 @@ function renderTableExposedBadge() {
 }
 
 function renderTrick() {
+  if (!state) return;
   trickArea.innerHTML = "";
   const trick = state.round?.trick || [];
   for (const play of trick) {
     const wrapper = document.createElement("div");
     wrapper.className = "played-card";
-    wrapper.style.setProperty("--angle", `${seatAngle(relativeSeat(play.seat))}deg`);
+    const point = trickCardPoint(play.seat);
+    wrapper.style.setProperty("--play-x", `${point.x}px`);
+    wrapper.style.setProperty("--play-y", `${point.y}px`);
     wrapper.appendChild(makeCard(play.card, { small: true, disabled: true, exposed: play.exposed }));
     trickArea.appendChild(wrapper);
   }
@@ -599,6 +606,31 @@ function seatAngle(relative) {
   return 90 + (360 * relative / count);
 }
 
+function trickCardPoint(seat) {
+  const seats = orderedSeatsForView();
+  const index = seats.indexOf(seat);
+  const point = slotPoint(index >= 0 ? index : relativeSeat(seat), seats.length);
+  const tableWidth = tableWrap.clientWidth || 1;
+  const tableHeight = tableWrap.clientHeight || 1;
+  const trickWidth = trickArea.clientWidth || 1;
+  const trickHeight = trickArea.clientHeight || 1;
+  const tableRect = tableWrap.getBoundingClientRect();
+  const trickRect = trickArea.getBoundingClientRect();
+  const zoom = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--page-zoom")) || 1;
+  const seatX = tableWidth * point.x / 100;
+  const seatY = tableHeight * point.y / 100;
+  const centerX = (trickRect.left - tableRect.left) / zoom + trickWidth / 2;
+  const centerY = (trickRect.top - tableRect.top) / zoom + trickHeight / 2;
+  const dx = seatX - centerX;
+  const dy = seatY - centerY;
+  const distance = Math.hypot(dx, dy) || 1;
+  const radius = Math.min(trickWidth, trickHeight) * (MOBILE_QUERY.matches ? 0.32 : 0.34);
+  return {
+    x: trickWidth / 2 + (dx / distance) * radius,
+    y: trickHeight / 2 + (dy / distance) * radius
+  };
+}
+
 function slotPoint(index, count) {
   if (tableModeEnabled && index === 0) {
     return { x: 50, y: window.innerWidth <= 640 ? 78 : 82 };
@@ -625,7 +657,7 @@ function mobileSeatSpread() {
   if (!MOBILE_QUERY.matches) return 1;
   const value = Number.parseInt(uiScaleInput?.value || defaultPageZoom(), 10);
   if (!Number.isFinite(value)) return 1;
-  return Math.min(1, Math.max(0, (value - 50) / 70));
+  return Math.min(1, Math.max(0, (value - 90) / 30));
 }
 
 function renderPigMarks(count, options = {}) {
