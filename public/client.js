@@ -26,6 +26,7 @@ const game = document.querySelector("#game");
 const joinForm = document.querySelector("#join-form");
 const nameInput = document.querySelector("#name-input");
 const codeInput = document.querySelector("#code-input");
+const spectatorPasswordInput = document.querySelector("#spectator-password-input");
 const createButton = document.querySelector("#create-button");
 const modeSelect = document.querySelector("#mode-select");
 const entryError = document.querySelector("#entry-error");
@@ -98,7 +99,7 @@ joinForm.addEventListener("submit", (event) => {
     entryError.textContent = "请输入房间码，或者点击创建房间。";
     return;
   }
-  socket.emit("joinRoom", { code, name: getName(), clientId }, handleJoinResponse);
+  socket.emit("joinRoom", { code, name: getName(), clientId, spectatorPassword: getSpectatorPassword() }, handleJoinResponse);
 });
 
 startButton.addEventListener("click", () => {
@@ -272,10 +273,18 @@ socket.on("state", (nextState) => {
   render();
 });
 
+socket.on("kicked", ({ message } = {}) => {
+  state = null;
+  selectedExpose.clear();
+  entry.classList.remove("hidden");
+  game.classList.add("hidden");
+  entryError.textContent = message || "你已被房主移出房间。";
+});
+
 socket.on("connect", () => {
   if (!state?.code || resumeInFlight) return;
   resumeInFlight = true;
-  socket.emit("joinRoom", { code: state.code, name: getName(), clientId }, (response) => {
+  socket.emit("joinRoom", { code: state.code, name: getName(), clientId, spectatorPassword: getSpectatorPassword() }, (response) => {
     resumeInFlight = false;
     if (!response?.ok) {
       statusLine.textContent = roomErrorMessage(response?.error || "重连房间失败，请刷新后重新加入");
@@ -303,6 +312,10 @@ function getName() {
   const name = nameInput.value.trim() || "玩家";
   localStorage.setItem("gongzhuName", name);
   return name;
+}
+
+function getSpectatorPassword() {
+  return spectatorPasswordInput?.value.trim() || "";
 }
 
 function getClientId() {
@@ -507,6 +520,7 @@ function render() {
   game.dataset.phase = phase;
   game.dataset.myTurn = myTurn ? "true" : "false";
   game.dataset.playerCount = String(playerCountForState());
+  game.dataset.role = state.role || (state.me ? "player" : "guest");
   game.style.setProperty("--player-count", String(playerCountForState()));
   roomCode.textContent = state.code;
   renderTopbar();
@@ -527,20 +541,26 @@ function renderTopbar() {
   const current = state.players[state.round?.currentPlayer];
 
   if (state.phase === "lobby") {
-    phaseTitle.textContent = `等待玩家 ${playerCount}/${targetCount}`;
+    phaseTitle.textContent = isSpectator()
+      ? `观众视角 · 等待玩家 ${playerCount}/${targetCount}`
+      : `等待玩家 ${playerCount}/${targetCount}`;
   } else if (phase === "expose") {
-    phaseTitle.textContent = `卖牌阶段 · ${exposeCountdownSeconds()} 秒后开打`;
+    phaseTitle.textContent = isSpectator()
+      ? `观众视角 · 卖牌阶段`
+      : `卖牌阶段 · ${exposeCountdownSeconds()} 秒后开打`;
   } else if (phase === "play") {
-    phaseTitle.textContent = current ? `轮到 ${current.name} 出牌` : "出牌中";
+    phaseTitle.textContent = current
+      ? `${isSpectator() ? "观众视角 · " : ""}轮到 ${current.name} 出牌`
+      : "出牌中";
   } else if (phase === "finished") {
     phaseTitle.textContent = `本局结束 · ${roundSummary()}`;
   }
 
   const isHost = state.hostId === socket.id;
   startButton.classList.toggle("hidden", state.phase !== "lobby");
-  startButton.disabled = !isHost || playerCount !== targetCount;
+  startButton.disabled = isSpectator() || !isHost || playerCount !== targetCount;
   newRoundButton.classList.toggle("hidden", phase !== "finished");
-  newRoundButton.disabled = !isHost;
+  newRoundButton.disabled = isSpectator() || !isHost;
   const canSurrender = Boolean(state.me) && phase === "play" && !state.round?.settlingTrick;
   surrenderButton?.classList.toggle("hidden", !canSurrender);
   if (surrenderButton) {
@@ -553,13 +573,11 @@ function renderTopbar() {
 
 function renderScores() {
   scoreStrip.innerHTML = "";
-  const pigKingSeat = firstPigKingSeat();
   for (const seat of orderedSeatsForView()) {
     const player = state.players[seat];
     const currentScore = currentRoundScore(seat);
     const pigCount = Math.max(0, Number.parseInt(player?.pigCount || 0, 10));
-    const isPigKing = seat === pigKingSeat;
-    const pigText = player ? `当猪 ${pigCount} 局${isPigKing ? "（@猪王）" : ""}` : "等待加入";
+    const pigText = player ? `当猪 ${pigCount} 局${pigEmojiSuffix(player)}` : "等待加入";
     const card = document.createElement("div");
     card.className = "score-card";
     if (state.round?.currentPlayer === seat) card.classList.add("active");
@@ -572,7 +590,8 @@ function renderScores() {
     card.innerHTML = `
       <div class="name">
         <span class="seat-badge">${seatBadgeLabel(seat)}</span>
-        <span class="name-text">${escapeHtml(player?.name || `空位 ${seat + 1}`)}${isPigKing ? "（@猪王）" : ""}</span>
+        <span class="name-text">${playerNameHtml(player, `空位 ${seat + 1}`)}</span>
+        ${player?.isHost ? `<span class="host-badge">房主</span>` : ""}
         <strong>${formatScore(currentScore)}</strong>
       </div>
       <div class="meta">${player ? `当前分数 ${formatScore(currentScore)} · ${pigText}` : "等待加入"}</div>
@@ -598,6 +617,7 @@ function renderSlots() {
     slot.style.setProperty("--seat-y", `${point.y}%`);
     const player = state.players[seat];
     const currentScore = currentRoundScore(seat);
+    const canKick = canKickSeat(seat);
     const slotMeta = player
       ? `<span>当前分数 ${formatScore(currentScore)}</span>`
       : "等待加入";
@@ -617,13 +637,15 @@ function renderSlots() {
     slot.innerHTML = `
       <div class="slot-top">
         <span class="slot-seat">${seatBadgeLabel(seat)}</span>
-        <span class="slot-name">${escapeHtml(player?.name || "空位")}${seat === firstPigKingSeat() ? "（@猪王）" : ""}</span>
+        <span class="slot-name">${playerNameHtml(player, "空位")}</span>
+        ${player?.isHost ? `<span class="slot-host">房主</span>` : ""}
       </div>
       <div class="slot-meta">${slotMeta}</div>
       ${player ? `
         <div class="slot-actions" aria-label="玩家互动">
           <button type="button" class="reaction-button" data-reaction="egg" title="投鸡蛋">鸡蛋</button>
           <button type="button" class="reaction-button" data-reaction="like" title="点赞">点赞</button>
+          ${canKick ? `<button type="button" class="kick-button" data-kick-seat="${seat}" title="移出房间">踢人</button>` : ""}
         </div>
       ` : ""}
       ${player?.connected === false ? `<div class="slot-alert">断线</div>` : ""}
@@ -633,6 +655,10 @@ function renderSlots() {
         event.stopPropagation();
         sendReaction(seat, button.dataset.reaction);
       });
+    });
+    slot.querySelector("[data-kick-seat]")?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      kickSeat(seat);
     });
     playerSlots.appendChild(slot);
   });
@@ -662,7 +688,8 @@ function renderSelfCornerSlot() {
   slot.innerHTML = `
     <div class="slot-top">
       <span class="slot-seat">${seatBadgeLabel(seat)}</span>
-      <span class="slot-name">${escapeHtml(player.name || "我")}${seat === firstPigKingSeat() ? "（@猪王）" : ""}</span>
+      <span class="slot-name">${playerNameHtml(player, "我")}</span>
+      ${player?.isHost ? `<span class="slot-host">房主</span>` : ""}
     </div>
     <div class="slot-meta"><span>当前分数 ${formatScore(currentRoundScore(seat))}</span></div>
     ${player.connected === false ? `<div class="slot-alert">断线</div>` : ""}
@@ -777,7 +804,7 @@ function renderTrick() {
   } else if (phase === "finished") {
     statusLine.textContent = "房主可以开始下一局";
   } else if (state.phase === "lobby") {
-    statusLine.textContent = "等待开局";
+    statusLine.textContent = isSpectator() ? "观众视角" : "等待开局";
   } else if (phase === "play") {
     const currentPlayer = state.players[state.round?.currentPlayer]?.name || "其他玩家";
     statusLine.textContent = `等待 ${currentPlayer} 出牌`;
@@ -798,6 +825,11 @@ function renderTrick() {
 
 function renderHand() {
   handEl.innerHTML = "";
+  if (isSpectator()) {
+    renderSpectatorHands();
+    return;
+  }
+  handEl.classList.remove("spectator-hands");
   const legal = new Set(state.legalPlays || []);
   const exposable = new Set(state.canExpose || []);
   const phase = state.round?.phase;
@@ -832,6 +864,43 @@ function renderHand() {
     });
     handEl.appendChild(cardEl);
   });
+}
+
+function renderSpectatorHands() {
+  exposeButton.classList.add("hidden");
+  exposeButton.disabled = true;
+  const allHands = Array.isArray(state.allHands) ? state.allHands : [];
+  const phase = state.round?.phase;
+  const handCount = allHands.reduce((sum, hand) => sum + (Array.isArray(hand) ? hand.length : 0), 0);
+  handTitle.textContent = phase
+    ? `观众视角 · 全部手牌 ${handCount} 张`
+    : "观众视角 · 等待开局";
+  handEl.classList.add("spectator-hands");
+  if (!state.round) {
+    handEl.innerHTML = `<div class="spectator-empty">等待房主开始牌局</div>`;
+    return;
+  }
+  for (const seat of orderedSeatsForView()) {
+    const player = state.players[seat];
+    const cards = sortHandForUse(allHands[seat] || [], new Set(), new Set(), phase);
+    const group = document.createElement("section");
+    group.className = "spectator-hand-group";
+    if (state.round?.currentPlayer === seat) group.classList.add("active");
+    group.innerHTML = `
+      <div class="spectator-hand-head">
+        <span>${escapeHtml(player?.directionLabel || "")}家 · ${escapeHtml(player?.name || `玩家${seat + 1}`)}</span>
+        <strong>${cards.length} 张</strong>
+      </div>
+      <div class="spectator-card-row"></div>
+    `;
+    const row = group.querySelector(".spectator-card-row");
+    cards.forEach((card, index) => {
+      const cardEl = makeCard(card, { small: true, disabled: true });
+      cardEl.style.setProperty("--i", index);
+      row.appendChild(cardEl);
+    });
+    handEl.appendChild(group);
+  }
 }
 
 function renderSidePanel() {
@@ -992,6 +1061,39 @@ function firstPigKingSeat() {
 function seatBadgeLabel(seat) {
   if (seat === firstPigKingSeat()) return "🐷";
   return seat + 1;
+}
+
+function pigEmojiSuffix(player) {
+  const pigCount = Math.max(0, Number.parseInt(player?.pigCount || 0, 10));
+  if (pigCount < 3) return "";
+  return " " + "🐷".repeat(Math.min(pigCount - 2, 8));
+}
+
+function playerNameHtml(player, fallback = "玩家") {
+  return `${escapeHtml(player?.name || fallback)}${escapeHtml(pigEmojiSuffix(player))}`;
+}
+
+function isHostMe() {
+  return state?.players?.some((player) => player?.isHost && player.socketId === socket.id);
+}
+
+function isSpectator() {
+  return state?.role === "spectator";
+}
+
+function canKickSeat(seat) {
+  return Boolean(state?.phase === "lobby"
+    && isHostMe()
+    && Number.isInteger(state?.me?.seat)
+    && state.me.seat !== seat
+    && state.players?.[seat]);
+}
+
+function kickSeat(seat) {
+  const player = state?.players?.[seat];
+  if (!player) return;
+  if (!window.confirm(`确认把 ${player.name} 移出房间？`)) return;
+  emitAction("kickPlayer", { seat });
 }
 
 function makeCard(card, options = {}) {

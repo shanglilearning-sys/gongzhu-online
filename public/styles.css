@@ -510,6 +510,26 @@ body.table-mode-active {
   text-overflow: ellipsis;
 }
 
+.host-badge,
+.slot-host {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(245, 217, 133, 0.42);
+  border-radius: 999px;
+  background: rgba(224, 184, 90, 0.16);
+  color: #f5d985;
+  font-size: 11px;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.host-badge {
+  min-height: 22px;
+  padding: 4px 7px;
+}
+
 .score-card .meta {
   margin-top: 6px;
   color: var(--muted);
@@ -996,7 +1016,7 @@ body.reduced-motion *::after {
 
 .slot-top {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 7px;
 }
@@ -1019,6 +1039,12 @@ body.reduced-motion *::after {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.slot-host {
+  min-height: 19px;
+  padding: 3px 6px;
+  font-size: 10px;
 }
 
 .slot-meta,
@@ -1069,6 +1095,19 @@ body.reduced-motion *::after {
 .reaction-button[data-reaction="egg"] {
   border-color: rgba(245, 217, 133, 0.34);
   background: rgba(224, 184, 90, 0.16);
+}
+
+.kick-button {
+  min-height: 25px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 111, 111, 0.42);
+  background: rgba(151, 38, 38, 0.2);
+  color: #ffd6d6;
+  box-shadow: none;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 950;
 }
 
 .reaction-flight {
@@ -1158,6 +1197,83 @@ body.reduced-motion *::after {
   overflow-y: visible;
   padding: 10px 4px 12px;
   scrollbar-width: thin;
+}
+
+.hand.spectator-hands {
+  display: grid;
+  grid-template-columns: repeat(var(--player-count, 4), minmax(180px, 1fr));
+  gap: 10px;
+  min-height: auto;
+  overflow: auto;
+  padding: 8px 2px 10px;
+}
+
+.spectator-hand-group {
+  min-width: 0;
+  border: 1px solid rgba(255, 238, 202, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.065);
+  padding: 8px;
+}
+
+.spectator-hand-group.active {
+  border-color: rgba(224, 184, 90, 0.78);
+  background: rgba(224, 184, 90, 0.12);
+}
+
+.spectator-hand-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: rgba(255, 250, 240, 0.82);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.spectator-hand-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spectator-hand-head strong {
+  color: #f5d985;
+  white-space: nowrap;
+}
+
+.spectator-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-content: flex-start;
+}
+
+.spectator-empty {
+  grid-column: 1 / -1;
+  min-height: 74px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed rgba(255, 238, 202, 0.22);
+  border-radius: 8px;
+  color: rgba(255, 250, 240, 0.66);
+  font-weight: 900;
+}
+
+.game-screen[data-role="spectator"] .my-table-score-panel,
+.game-screen[data-role="spectator"] .self-corner-slot,
+.game-screen[data-role="spectator"] #surrender-button,
+.game-screen[data-role="spectator"] #start-button,
+.game-screen[data-role="spectator"] #new-round-button {
+  display: none !important;
+}
+
+.game-screen[data-role="spectator"] .reaction-button,
+.game-screen[data-role="spectator"] .kick-button,
+.game-screen[data-role="spectator"] .chat-form button {
+  display: none;
 }
 
 .card {
@@ -1808,7 +1924,8 @@ body.reduced-motion *::after {
   }
 
   .score-card .name {
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    gap: 6px;
   }
 
   .seat-badge {
@@ -1951,6 +2068,18 @@ body.reduced-motion *::after {
     font-size: 12px;
   }
 
+  .host-badge {
+    min-height: 19px;
+    padding: 3px 5px;
+    font-size: 9.5px;
+  }
+
+  .slot-host {
+    min-height: 16px;
+    padding: 2px 4px;
+    font-size: 8.5px;
+  }
+
   .slot-meta,
   .slot-alert {
     font-size: 10px;
@@ -1963,6 +2092,12 @@ body.reduced-motion *::after {
   .reaction-button {
     min-height: 20px;
     padding: 0 4px;
+    font-size: 9.5px;
+  }
+
+  .kick-button {
+    min-height: 20px;
+    padding: 0 5px;
     font-size: 9.5px;
   }
 
@@ -2036,6 +2171,24 @@ body.reduced-motion *::after {
     gap: 2px;
     min-height: 83px;
     padding: 10px 5px 12px;
+  }
+
+  .hand.spectator-hands {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    max-height: 46svh;
+  }
+
+  .spectator-hand-group {
+    padding: 7px;
+  }
+
+  .spectator-card-row {
+    gap: 2px;
+  }
+
+  .spectator-card-row .card.small {
+    margin-right: -6px;
   }
 
   .hand .card {

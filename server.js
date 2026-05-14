@@ -28,6 +28,8 @@ const SPECIAL_CARDS = ["SQ", "DJ", "C10", "HA"];
 const SCORING_CARD_IDS = new Set(["SQ", "DJ", "C10", "H5", "H6", "H7", "H8", "H9", "H10", "HJ", "HQ", "HK", "HA"]);
 const DEFAULT_TRICK_SETTLE_DELAY_MS = Number.parseInt(process.env.TRICK_SETTLE_DELAY_MS || "1000", 10);
 const DEFAULT_EXPOSE_DURATION_MS = Number.parseInt(process.env.EXPOSE_DURATION_MS || "8000", 10);
+const DEFAULT_EMPTY_PLAYING_ROOM_TTL_MS = Number.parseInt(process.env.EMPTY_PLAYING_ROOM_TTL_MS || String(5 * 60 * 1000), 10);
+const SPECTATOR_PASSWORD = process.env.SPECTATOR_PASSWORD || "2026";
 const INSTANCE_ID = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const ROOM_SNAPSHOT_VERSION = 1;
 const DEFAULT_ROOM_STATE_KEY = "gongzhu:rooms:v1";
@@ -54,6 +56,9 @@ function createGameServer(options = {}) {
   const exposeDurationMs = Number.isFinite(options.exposeDurationMs)
     ? options.exposeDurationMs
     : DEFAULT_EXPOSE_DURATION_MS;
+  const emptyPlayingRoomTtlMs = Number.isFinite(options.emptyPlayingRoomTtlMs)
+    ? options.emptyPlayingRoomTtlMs
+    : DEFAULT_EMPTY_PLAYING_ROOM_TTL_MS;
 
   let persistQueue = Promise.resolve();
   const persistRooms = () => {
@@ -86,6 +91,7 @@ function createGameServer(options = {}) {
         rooms.set(room.code, room);
         scheduleExposeFinish(room);
         schedulePendingTrick(room);
+        scheduleEmptyPlayingRoomCleanup(room);
       }
       if (restoredRooms.length > 0) {
         console.log(`[${INSTANCE_ID}] restored ${restoredRooms.length} room(s) from ${persistence.kind}`);
@@ -194,15 +200,59 @@ function createGameServer(options = {}) {
       }
     }
 
-    if (room.players.length === 0 && room.spectators.length === 0) {
+    if (room.phase !== "playing" && room.players.length === 0 && room.spectators.length === 0) {
       clearExposeTimer(room);
       clearPendingTrickTimer(room);
+      clearEmptyRoomTimer(room);
       rooms.delete(code);
       persistRooms();
     } else {
+      scheduleEmptyPlayingRoomCleanup(room);
       emitRoom(room);
       persistRooms();
     }
+  }
+
+  function hasActiveParticipants(room) {
+    return room.players.some((player) => player.connected && player.socketId)
+      || room.spectators.some((spectator) => spectator.socketId);
+  }
+
+  function clearEmptyRoomTimer(room) {
+    if (room?.emptyRoomTimer) {
+      clearTimeout(room.emptyRoomTimer);
+      room.emptyRoomTimer = null;
+    }
+    if (room) room.emptySince = null;
+  }
+
+  function scheduleEmptyPlayingRoomCleanup(room) {
+    if (!room || room.phase !== "playing") {
+      clearEmptyRoomTimer(room);
+      return;
+    }
+    if (hasActiveParticipants(room)) {
+      clearEmptyRoomTimer(room);
+      return;
+    }
+    if (!Number.isFinite(emptyPlayingRoomTtlMs) || emptyPlayingRoomTtlMs <= 0) return;
+    room.emptySince ||= Date.now();
+    if (room.emptyRoomTimer) return;
+    const elapsed = Date.now() - room.emptySince;
+    const delay = Math.max(0, emptyPlayingRoomTtlMs - elapsed);
+    room.emptyRoomTimer = setTimeout(() => {
+      room.emptyRoomTimer = null;
+      if (!rooms.has(room.code) || room.phase !== "playing" || hasActiveParticipants(room)) {
+        scheduleEmptyPlayingRoomCleanup(room);
+        return;
+      }
+      clearExposeTimer(room);
+      clearPendingTrickTimer(room);
+      rooms.delete(room.code);
+      persistRooms();
+      console.log(`[${INSTANCE_ID}] removed empty playing room ${room.code}`);
+    }, delay);
+    room.emptyRoomTimer.unref?.();
   }
 
   function clearPendingTrickTimer(room) {
@@ -242,6 +292,7 @@ function createGameServer(options = {}) {
     for (const room of rooms.values()) {
       clearExposeTimer(room);
       clearPendingTrickTimer(room);
+      clearEmptyRoomTimer(room);
     }
     const pending = persistQueue
       .catch(() => {})
@@ -287,7 +338,7 @@ function createGameServer(options = {}) {
       }
     });
 
-    socket.on("joinRoom", ({ code, name, clientId } = {}, callback = () => {}) => {
+    socket.on("joinRoom", ({ code, name, clientId, spectatorPassword } = {}, callback = () => {}) => {
       try {
         const room = rooms.get(String(code || "").trim().toUpperCase());
         if (!room) {
@@ -298,12 +349,15 @@ function createGameServer(options = {}) {
             : "当前持久化存储里也没有这个房间，可能是房间已结束或存储连接异常。";
           throw new Error(`没有找到这个房间。${detail}请确认所有人打开的是同一个 Render 地址，必要时重新开房。`);
         }
-        const participant = addPlayerToRoom(room, socket.id, name, socketRooms, clientId);
+        const participant = addPlayerToRoom(room, socket.id, name, socketRooms, clientId, { spectatorPassword });
+        clearEmptyRoomTimer(room);
         socket.join(room.code);
         const joined = room.players.find((player) => player.socketId === socket.id);
         const displayName = joined?.name || participant?.name || name || "旁观者";
-        pushMessage(room, `${displayName} 加入了房间。`);
-        console.log(`[${INSTANCE_ID}] join room ${room.code} by ${displayName}`);
+        if (participant.role !== "spectator") {
+          pushMessage(room, `${displayName} 加入了房间。`);
+        }
+        console.log(`[${INSTANCE_ID}] join room ${room.code} by ${displayName}${participant.role === "spectator" ? " as spectator" : ""}`);
         persistRooms();
         emitRoom(room);
         callback({ ok: true, code: room.code });
@@ -319,6 +373,20 @@ function createGameServer(options = {}) {
         if (room.hostId !== socket.id) throw new Error("只有房主能开始");
         startRound(room, { exposeDurationMs });
         scheduleExposeFinish(room);
+        persistRooms();
+        emitRoom(room);
+        callback({ ok: true });
+      } catch (error) {
+        callback({ ok: false, error: error.message });
+      }
+    });
+
+    socket.on("kickPlayer", ({ seat } = {}, callback = () => {}) => {
+      try {
+        const room = getRoomForSocket(socket);
+        if (!room) throw new Error("请先进入房间");
+        if (room.hostId !== socket.id) throw new Error("只有房主能踢人");
+        kickPlayer(room, socket, seat, io, socketRooms);
         persistRooms();
         emitRoom(room);
         callback({ ok: true });
@@ -399,6 +467,7 @@ function createGameServer(options = {}) {
         const room = getRoomForSocket(socket);
         if (!room) throw new Error("请先进入房间");
         if (room.hostId !== socket.id) throw new Error("只有房主能开新局");
+        if (room.round?.phase !== "finished") throw new Error("本局结束后才能开新局");
         startRound(room, { exposeDurationMs });
         scheduleExposeFinish(room);
         persistRooms();
@@ -413,8 +482,7 @@ function createGameServer(options = {}) {
       try {
         const room = getRoomForSocket(socket);
         if (!room) throw new Error("请先进入房间");
-        const sender = room.players.find((candidate) => candidate.socketId === socket.id)
-          || room.spectators.find((candidate) => candidate.socketId === socket.id);
+        const sender = room.players.find((candidate) => candidate.socketId === socket.id);
         if (!sender) throw new Error("你不在这个房间");
         const cleanText = String(text || "").trim().slice(0, 200);
         if (!cleanText) throw new Error("消息不能为空");
@@ -889,6 +957,10 @@ function reseatPlayers(room) {
   });
 }
 
+function connectedPlayerCount(room) {
+  return room.players.filter((player) => player.connected && player.socketId).length;
+}
+
 function shuffle(cards) {
   const deck = [...cards];
   for (let index = deck.length - 1; index > 0; index -= 1) {
@@ -972,7 +1044,39 @@ function reconnectParticipant(room, participant, socketId, name, socketRooms) {
   return participant;
 }
 
-function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = socketId) {
+function assignHostToFirstPlayer(room) {
+  if (room.players.length === 0) {
+    room.hostId = null;
+    room.hostClientId = null;
+    return;
+  }
+  room.hostId = room.players[0].socketId;
+  room.hostClientId = room.players[0].clientId;
+}
+
+function kickPlayer(room, hostSocket, seat, io, socketRooms) {
+  if (room.phase !== "lobby") throw new Error("只有开局前可以踢人");
+  const targetSeat = Number.parseInt(seat, 10);
+  if (!Number.isInteger(targetSeat) || targetSeat < 0 || targetSeat >= room.players.length) {
+    throw new Error("目标玩家不存在");
+  }
+  const host = room.players.find((player) => player.socketId === hostSocket.id);
+  if (!host) throw new Error("你不是这局的玩家");
+  if (host.seat === targetSeat) throw new Error("房主不能踢自己");
+
+  const [removed] = room.players.splice(targetSeat, 1);
+  if (!removed) throw new Error("目标玩家不存在");
+  clearRoomSocket(room, socketRooms, removed.socketId);
+  reseatPlayers(room);
+  assignHostToFirstPlayer(room);
+  pushMessage(room, `${removed.name} 被房主移出房间。`);
+  if (removed.socketId) {
+    io.to(removed.socketId).emit("kicked", { code: room.code, message: "你已被房主移出房间。" });
+    io.sockets.sockets.get(removed.socketId)?.leave(room.code);
+  }
+}
+
+function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = socketId, options = {}) {
   const cleanName = String(name || "玩家").trim().slice(0, 16) || "玩家";
   const cleanClientId = normalizeClientId(clientId, socketId);
   const existing = room.players.find((player) => player.socketId === socketId);
@@ -991,11 +1095,13 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = so
 
   const reconnectingSpectator = room.spectators.find((spectator) => spectator.clientId === cleanClientId);
   if (reconnectingSpectator) {
+    assertSpectatorPassword(options.spectatorPassword);
     return reconnectParticipant(room, reconnectingSpectator, socketId, cleanName, socketRooms);
   }
 
   const playerCount = getPlayerCount(room);
   if (room.players.length >= playerCount || room.phase !== "lobby") {
+    assertSpectatorPassword(options.spectatorPassword);
     const spectator = {
       socketId,
       clientId: cleanClientId,
@@ -1023,6 +1129,12 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = so
   return player;
 }
 
+function assertSpectatorPassword(value) {
+  if (String(value || "") !== SPECTATOR_PASSWORD) {
+    throw new Error("房间已满或牌局已开始，观众需要输入正确密码。");
+  }
+}
+
 function publicRoom(room) {
   const playerCount = getPlayerCount(room);
   return {
@@ -1039,14 +1151,11 @@ function publicRoom(room) {
       seat: player.seat,
       direction: player.direction,
       directionLabel: player.directionLabel,
+      isHost: player.clientId === room.hostClientId,
       connected: player.connected,
       pigCount: player.pigCount || 0,
       handCount: room.round?.hands[player.seat]?.length ?? 0,
       scoreCards: room.round ? scoringCardsFor(room.round.taken[player.seat] || []) : []
-    })),
-    spectators: room.spectators.map((spectator) => ({
-      socketId: spectator.socketId,
-      name: spectator.name
     })),
     round: room.round ? publicRound(room.round) : null,
     chats: room.chats.slice(-80),
@@ -1100,6 +1209,7 @@ function publicSurrenderVote(room) {
 function privateStateFor(room, socketId) {
   const state = publicRoom(room);
   const player = room.players.find((candidate) => candidate.socketId === socketId);
+  const spectator = room.spectators.find((candidate) => candidate.socketId === socketId);
   if (player && room.round) {
     state.me = {
       socketId,
@@ -1112,6 +1222,16 @@ function privateStateFor(room, socketId) {
     state.canExpose = room.round.phase === "expose"
       ? getExposableCardIds(room.round, player.seat)
       : [];
+  } else if (spectator) {
+    state.me = null;
+    state.role = "spectator";
+    state.spectator = { name: spectator.name };
+    state.hand = [];
+    state.legalPlays = [];
+    state.canExpose = [];
+    state.allHands = room.round
+      ? room.round.hands.map((hand) => hand.map(cardSnapshot))
+      : [];
   } else {
     state.me = player ? {
       socketId,
@@ -1123,6 +1243,7 @@ function privateStateFor(room, socketId) {
     state.legalPlays = [];
     state.canExpose = [];
   }
+  if (!state.role) state.role = player ? "player" : "guest";
   return state;
 }
 
@@ -1163,6 +1284,9 @@ function startRound(room, options = {}) {
   const playerCount = getPlayerCount(room);
   if (room.players.length !== playerCount) {
     throw new Error(`需要 ${playerCount} 位玩家才能开始`);
+  }
+  if (connectedPlayerCount(room) !== playerCount) {
+    throw new Error("所有玩家在线后才能开始");
   }
   if (room.exposeTimer) {
     clearTimeout(room.exposeTimer);

@@ -88,6 +88,10 @@ function connectClient(url) {
 
 async function main() {
   await testProcessRestartRestore();
+  await testEmptyPlayingRoomGracePeriod();
+  await testStartRequiresConnectedPlayers();
+  await testHostKickPlayer();
+  await testSpectatorPasswordAndHiddenFullHandView();
   await testPlayerCountModes();
   await testSurrenderVoteFlow();
   await testFullGameFlow();
@@ -286,6 +290,177 @@ async function testFullGameFlow() {
       assert.ok(publicScoreCardIds.includes(id), `score cards should include ${id}`);
     }
     console.log("online ok");
+  } finally {
+    for (const client of clients) client.socket.disconnect();
+    await io.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testEmptyPlayingRoomGracePeriod() {
+  const { server, io, ready, rooms } = createGameServer({
+    trickSettleDelayMs: 10,
+    exposeDurationMs: 200,
+    emptyPlayingRoomTtlMs: 120
+  });
+  await ready;
+  const port = await listen(server);
+  const url = `http://127.0.0.1:${port}`;
+  const clientIds = ["empty-0", "empty-1", "empty-2", "empty-3"];
+  const clients = Array.from({ length: 4 }, () => connectClient(url));
+
+  try {
+    await Promise.all(clients.map((client) => client.connected));
+    const { code } = await clients[0].emit("createRoom", { name: "甲", clientId: clientIds[0] });
+    for (let index = 1; index < clients.length; index += 1) {
+      await clients[index].emit("joinRoom", { code, name: `玩家${index}`, clientId: clientIds[index] });
+    }
+    await clients[0].emit("startGame");
+    await clients[0].waitFor((state) => state.phase === "playing", "playing before empty");
+
+    for (const client of clients) client.socket.disconnect();
+    assert.equal(rooms.has(code), true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(rooms.has(code), true);
+
+    const reconnected = connectClient(url);
+    await reconnected.connected;
+    await reconnected.emit("joinRoom", { code, name: "甲", clientId: clientIds[0] });
+    await reconnected.waitFor((state) => state.code === code && state.me?.seat === 0, "empty room reconnect");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(rooms.has(code), true);
+    reconnected.socket.disconnect();
+
+    await new Promise((resolve) => setTimeout(resolve, 160));
+    assert.equal(rooms.has(code), false);
+    console.log("empty room grace ok");
+  } finally {
+    for (const client of clients) client.socket.disconnect();
+    await io.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testStartRequiresConnectedPlayers() {
+  const { server, io, ready, rooms } = createGameServer({ trickSettleDelayMs: 10, exposeDurationMs: 200 });
+  await ready;
+  const port = await listen(server);
+  const url = `http://127.0.0.1:${port}`;
+  const clientIds = ["online-0", "online-1", "online-2", "online-3"];
+  const clients = Array.from({ length: 4 }, () => connectClient(url));
+
+  try {
+    await Promise.all(clients.map((client) => client.connected));
+    const { code } = await clients[0].emit("createRoom", { name: "甲", clientId: clientIds[0] });
+    for (let index = 1; index < clients.length; index += 1) {
+      await clients[index].emit("joinRoom", { code, name: `玩家${index}`, clientId: clientIds[index] });
+    }
+    await clients[0].emit("startGame");
+    await clients[0].waitFor((state) => state.round?.phase === "expose", "started before disconnect");
+    clients[3].socket.disconnect();
+    await clients[0].waitFor((state) => state.players[3]?.connected === false, "offline player before new round");
+    rooms.get(code).round.phase = "finished";
+    await assert.rejects(
+      () => clients[0].emit("newRound"),
+      /所有玩家在线后才能开始/
+    );
+
+    const reconnected = connectClient(url);
+    await reconnected.connected;
+    await reconnected.emit("joinRoom", { code, name: "玩家3", clientId: clientIds[3] });
+    await clients[0].waitFor((state) => state.players[3]?.connected === true, "offline player rejoined before new round");
+    await clients[0].emit("newRound");
+    await clients[0].waitFor((state) => state.round?.phase === "expose" && state.round.handNumber === 2, "new round after reconnect");
+    reconnected.socket.disconnect();
+    console.log("connected start guard ok");
+  } finally {
+    for (const client of clients) client.socket.disconnect();
+    await io.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testHostKickPlayer() {
+  const { server, io, ready } = createGameServer({ trickSettleDelayMs: 10, exposeDurationMs: 20 });
+  await ready;
+  const port = await listen(server);
+  const url = `http://127.0.0.1:${port}`;
+  const clients = Array.from({ length: 3 }, () => connectClient(url));
+
+  try {
+    await Promise.all(clients.map((client) => client.connected));
+    const { code } = await clients[0].emit("createRoom", { name: "房主", clientId: "kick-0" });
+    await clients[1].emit("joinRoom", { code, name: "乙", clientId: "kick-1" });
+    await clients[2].emit("joinRoom", { code, name: "丙", clientId: "kick-2" });
+    await clients[0].waitFor((state) => state.players.length === 3 && state.players[0].isHost === true, "host badge");
+
+    await assert.rejects(
+      () => clients[1].emit("kickPlayer", { seat: 2 }),
+      /只有房主能踢人/
+    );
+
+    const kicked = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timed out waiting for kicked event")), 1000);
+      clients[2].socket.once("kicked", (payload) => {
+        clearTimeout(timer);
+        resolve(payload);
+      });
+    });
+    await clients[0].emit("kickPlayer", { seat: 2 });
+    const payload = await kicked;
+    assert.equal(payload.message, "你已被房主移出房间。");
+    await clients[0].waitFor((state) => state.players.length === 2 && state.players.every((player) => player.name !== "丙"), "player kicked");
+    console.log("host kick ok");
+  } finally {
+    for (const client of clients) client.socket.disconnect();
+    await io.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testSpectatorPasswordAndHiddenFullHandView() {
+  const { server, io, ready } = createGameServer({ trickSettleDelayMs: 10, exposeDurationMs: 200 });
+  await ready;
+  const port = await listen(server);
+  const url = `http://127.0.0.1:${port}`;
+  const clients = Array.from({ length: 5 }, () => connectClient(url));
+
+  try {
+    await Promise.all(clients.map((client) => client.connected));
+    const { code } = await clients[0].emit("createRoom", { name: "甲", clientId: "spectator-0" });
+    await clients[1].emit("joinRoom", { code, name: "乙", clientId: "spectator-1" });
+    await clients[2].emit("joinRoom", { code, name: "丙", clientId: "spectator-2" });
+    await clients[3].emit("joinRoom", { code, name: "丁", clientId: "spectator-3" });
+    await clients[0].waitFor((state) => state.players.length === 4, "full room before spectator");
+    const messagesBefore = clients[0].state.messages.length;
+
+    await assert.rejects(
+      () => clients[4].emit("joinRoom", { code, name: "观众", clientId: "spectator-4" }),
+      /观众需要输入正确密码/
+    );
+    await clients[4].emit("joinRoom", { code, name: "观众", clientId: "spectator-4", spectatorPassword: "2026" });
+    await clients[4].waitFor((state) => state.role === "spectator" && state.me === null, "spectator joined");
+    await clients[0].waitFor((state) => state.players.length === 4, "players still only see players");
+    assert.equal(clients[0].state.spectators, undefined);
+    assert.equal(clients[0].state.messages.length, messagesBefore);
+
+    await clients[0].emit("startGame");
+    await clients[4].waitFor(
+      (state) => state.role === "spectator"
+        && state.round?.phase === "expose"
+        && state.allHands?.length === 4
+        && state.allHands.every((hand) => hand.length === 13),
+      "spectator full hand view"
+    );
+    assert.equal(clients[4].state.hand.length, 0);
+    assert.equal(clients[4].state.legalPlays.length, 0);
+    assert.equal(clients[4].state.canExpose.length, 0);
+
+    await assert.rejects(
+      () => clients[4].emit("chatMessage", { text: "我在看" }),
+      /你不在这个房间/
+    );
+    console.log("spectator ok");
   } finally {
     for (const client of clients) client.socket.disconnect();
     await io.close();
