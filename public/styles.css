@@ -89,6 +89,16 @@ button.secondary:hover {
   background: rgba(255, 250, 240, 0.16);
 }
 
+button.danger {
+  border-color: rgba(255, 141, 154, 0.42);
+  background: rgba(142, 29, 44, 0.32);
+  color: #ffd8dc;
+}
+
+button.danger:hover {
+  background: rgba(170, 38, 56, 0.44);
+}
+
 button.mobile-hidden {
   display: none !important;
 }
@@ -774,7 +784,7 @@ body.table-mode-active {
     var(--table-inset-x)
     var(--table-inset-y);
   display: grid;
-  grid-template-rows: auto minmax(180px, 1fr) auto;
+  grid-template-rows: minmax(180px, 1fr) auto;
   place-items: center;
   gap: 12px;
   color: #fff;
@@ -789,7 +799,7 @@ body.table-mode-active {
 }
 
 .trick-area {
-  grid-row: 2;
+  grid-row: 1;
   width: min(calc(420px * var(--ui-scale)), 52vw);
   min-height: calc(240px * var(--ui-scale));
   position: relative;
@@ -805,11 +815,12 @@ body.table-mode-active {
 }
 
 .status-line {
-  grid-row: 1;
-  position: relative;
+  position: absolute;
   z-index: 5;
+  left: 14px;
+  bottom: clamp(86px, calc(96px * var(--ui-scale)), 116px);
   min-height: 32px;
-  max-width: min(420px, 100%);
+  max-width: min(300px, calc(100% - 28px));
   border: 1px solid rgba(255, 238, 202, 0.18);
   border-radius: 999px;
   background: rgba(4, 22, 15, 0.54);
@@ -846,6 +857,53 @@ body.table-mode-active {
   animation: softPulse 1.2s ease-in-out infinite;
 }
 
+.surrender-vote-panel {
+  position: absolute;
+  z-index: 6;
+  left: 14px;
+  bottom: clamp(156px, calc(170px * var(--ui-scale)), 204px);
+  width: min(300px, calc(100% - 28px));
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(255, 238, 202, 0.2);
+  border-radius: 8px;
+  background: rgba(5, 19, 13, 0.78);
+  color: #fffaf0;
+  padding: 10px;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
+  animation: panelIn 180ms ease both;
+}
+
+.surrender-vote-panel strong,
+.surrender-vote-panel span {
+  display: block;
+}
+
+.surrender-vote-panel strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.surrender-vote-panel span {
+  margin-top: 3px;
+  color: rgba(255, 250, 240, 0.7);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.surrender-vote-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.surrender-vote-actions button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 body.reduced-motion *,
 body.reduced-motion *::before,
 body.reduced-motion *::after {
@@ -863,7 +921,7 @@ body.reduced-motion *::after {
 }
 
 .last-trick {
-  grid-row: 3;
+  grid-row: 2;
   min-height: 34px;
   max-width: min(520px, 100%);
   color: rgba(255, 255, 255, 0.76);
@@ -1771,7 +1829,7 @@ body.reduced-motion *::after {
       var(--table-inset-y)
       var(--table-inset-x)
       58px;
-    grid-template-rows: auto minmax(190px, 1fr) auto;
+    grid-template-rows: minmax(190px, 1fr) auto;
     gap: 8px;
   }
 
@@ -1781,18 +1839,24 @@ body.reduced-motion *::after {
   }
 
   .status-line {
-    position: absolute;
-    left: 50%;
-    top: 30%;
+    left: 9px;
+    top: auto;
+    bottom: 78px;
     z-index: 6;
     width: max-content;
     min-width: 132px;
     min-height: 30px;
-    max-width: min(248px, calc(100vw - 116px));
+    max-width: 220px;
     padding: 6px 12px;
     font-size: 12px;
-    transform: translate(-50%, -50%);
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  }
+
+  .surrender-vote-panel {
+    left: 9px;
+    bottom: 122px;
+    width: min(230px, calc(100% - 18px));
+    padding: 9px;
   }
 
   .game-screen[data-my-turn="true"] .status-line {
@@ -1928,6 +1992,18 @@ body.reduced-motion *::after {
     left: 8px;
     bottom: 8px;
     width: 112px;
+  }
+
+  .game-screen.table-mode .status-line {
+    left: 8px;
+    bottom: 82px;
+    max-width: 210px;
+  }
+
+  .game-screen.table-mode .surrender-vote-panel {
+    left: 8px;
+    bottom: 126px;
+    width: min(220px, calc(100% - 16px));
   }
 
   .game-screen.table-mode .table-exposed-badge {

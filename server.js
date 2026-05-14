@@ -160,6 +160,7 @@ function createGameServer(options = {}) {
       hostClientId: clientId,
       round: null,
       pigKingSeat: null,
+      surrenderVote: null,
       chats: [],
       messages: [],
       createdAt: Date.now()
@@ -357,6 +358,34 @@ function createGameServer(options = {}) {
         const player = assertPlayer(socket, room);
         playCard(room, player.seat, cardId, { settleDelayMs: trickSettleDelayMs });
         schedulePendingTrick(room);
+        persistRooms();
+        emitRoom(room);
+        callback({ ok: true });
+      } catch (error) {
+        callback({ ok: false, error: error.message });
+      }
+    });
+
+    socket.on("requestSurrender", (payload, callback = () => {}) => {
+      try {
+        const room = getRoomForSocket(socket);
+        if (!room) throw new Error("请先进入房间");
+        const player = assertPlayer(socket, room);
+        requestSurrender(room, player.seat);
+        persistRooms();
+        emitRoom(room);
+        callback({ ok: true });
+      } catch (error) {
+        callback({ ok: false, error: error.message });
+      }
+    });
+
+    socket.on("voteSurrender", ({ approve } = {}, callback = () => {}) => {
+      try {
+        const room = getRoomForSocket(socket);
+        if (!room) throw new Error("请先进入房间");
+        const player = assertPlayer(socket, room);
+        voteSurrender(room, player.seat, Boolean(approve));
         persistRooms();
         emitRoom(room);
         callback({ ok: true });
@@ -582,6 +611,7 @@ function roomToSnapshot(room) {
     spectators: room.spectators.map(participantToSnapshot),
     hostClientId: room.hostClientId,
     pigKingSeat: Number.isInteger(room.pigKingSeat) ? room.pigKingSeat : null,
+    surrenderVote: room.surrenderVote ? surrenderVoteToSnapshot(room.surrenderVote) : null,
     round: room.round ? roundToSnapshot(room.round) : null,
     chats: room.chats || [],
     messages: room.messages || [],
@@ -608,6 +638,18 @@ function participantToSnapshot(participant) {
 function firstPigKingSeatForPlayers(players) {
   const winner = players.find((player) => Math.max(0, Number.parseInt(player?.pigCount || 0, 10)) >= 3);
   return Number.isInteger(winner?.seat) ? winner.seat : null;
+}
+
+function surrenderVoteToSnapshot(vote) {
+  return {
+    targetSeat: vote.targetSeat,
+    roundNumber: vote.roundNumber,
+    requiredApprovals: vote.requiredApprovals,
+    approvals: Array.from(vote.approvals || []),
+    rejections: Array.from(vote.rejections || []),
+    voters: Array.from(vote.voters || []),
+    createdAt: vote.createdAt
+  };
 }
 
 function roundToSnapshot(round) {
@@ -667,6 +709,9 @@ function roomFromSnapshot(snapshot) {
   const pigKingSeat = Number.isInteger(snapshot.pigKingSeat)
     ? snapshot.pigKingSeat
     : firstPigKingSeatForPlayers(players);
+  const surrenderVote = snapshot.surrenderVote
+    ? surrenderVoteFromSnapshot(snapshot.surrenderVote, playerCount)
+    : null;
   return {
     code: String(snapshot.code).trim().toUpperCase(),
     phase: snapshot.phase || (round ? "playing" : "lobby"),
@@ -684,12 +729,37 @@ function roomFromSnapshot(snapshot) {
     hostId: null,
     hostClientId,
     pigKingSeat,
+    surrenderVote,
     round,
     chats: Array.isArray(snapshot.chats) ? snapshot.chats.slice(-80) : [],
     messages: Array.isArray(snapshot.messages) ? snapshot.messages.slice(-50) : [],
     createdAt: snapshot.createdAt || Date.now(),
     trickTimer: null
   };
+}
+
+function surrenderVoteFromSnapshot(snapshot, playerCount) {
+  const targetSeat = Number.parseInt(snapshot.targetSeat, 10);
+  if (!Number.isInteger(targetSeat) || targetSeat < 0 || targetSeat >= playerCount) return null;
+  const voters = normalizeSeatList(snapshot.voters, playerCount).filter((seat) => seat !== targetSeat);
+  const requiredApprovals = Number.isInteger(snapshot.requiredApprovals)
+    ? snapshot.requiredApprovals
+    : Math.floor(voters.length / 2) + 1;
+  return {
+    targetSeat,
+    roundNumber: Number.parseInt(snapshot.roundNumber, 10) || null,
+    requiredApprovals,
+    approvals: new Set(normalizeSeatList(snapshot.approvals, playerCount).filter((seat) => voters.includes(seat))),
+    rejections: new Set(normalizeSeatList(snapshot.rejections, playerCount).filter((seat) => voters.includes(seat))),
+    voters,
+    createdAt: snapshot.createdAt || Date.now()
+  };
+}
+
+function normalizeSeatList(value, playerCount) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((seat) => Number.parseInt(seat, 10)).filter((seat) => Number.isInteger(seat) && seat >= 0 && seat < playerCount))]
+    : [];
 }
 
 function roundFromSnapshot(snapshot, playerCount = 4) {
@@ -863,6 +933,7 @@ function createTestRoom(hostSocketId, hostName, hostClientId = hostSocketId, opt
     hostClientId: clientId,
     round: null,
     pigKingSeat: null,
+    surrenderVote: null,
     messages: [],
     chats: [],
     createdAt: Date.now()
@@ -961,6 +1032,7 @@ function publicRoom(room) {
     hostId: room.hostId,
     instanceId: INSTANCE_ID,
     pigKingSeat: Number.isInteger(room.pigKingSeat) ? room.pigKingSeat : null,
+    surrenderVote: publicSurrenderVote(room),
     players: room.players.map((player) => ({
       socketId: player.socketId,
       name: player.name,
@@ -1008,6 +1080,20 @@ function publicRound(round) {
     scorePreview: Array.isArray(round.scorePreview) ? round.scorePreview.slice(0, playerCount) : zeroScores(playerCount),
     finishedScores: Array.isArray(round.finishedScores) ? round.finishedScores.slice(0, playerCount) : null,
     pigSeats: round.pigSeats || []
+  };
+}
+
+function publicSurrenderVote(room) {
+  const vote = room.surrenderVote;
+  if (!hasActiveSurrenderVote(room)) return null;
+  return {
+    targetSeat: vote.targetSeat,
+    roundNumber: vote.roundNumber,
+    requiredApprovals: vote.requiredApprovals,
+    approvals: Array.from(vote.approvals || []),
+    rejections: Array.from(vote.rejections || []),
+    voters: Array.from(vote.voters || []),
+    createdAt: vote.createdAt
   };
 }
 
@@ -1088,6 +1174,7 @@ function startRound(room, options = {}) {
   if (!Number.isInteger(room.pigKingSeat)) {
     room.pigKingSeat = firstPigKingSeatForPlayers(room.players);
   }
+  room.surrenderVote = null;
 
   const deck = shuffle(deckForPlayerCount(playerCount));
   const hands = Array.from({ length: playerCount }, () => []);
@@ -1127,7 +1214,8 @@ function startRound(room, options = {}) {
     lastTrick: null,
     heartsSeen: false,
     scorePreview: zeroScores(playerCount),
-    finishedScores: null
+    finishedScores: null,
+    pigSeats: []
   };
   const removed = REMOVED_CARDS_BY_COUNT[playerCount] || [];
   const removedText = removed.length ? `（移除 ${removed.map(formatCardId).join("、")}）` : "";
@@ -1213,6 +1301,7 @@ function playCard(room, seat, cardId, options = {}) {
   const round = room.round;
   if (!round || round.phase !== "play") throw new Error("牌局尚未开始");
   if (round.pendingTrickResolution) throw new Error("本墩正在结算，请稍等");
+  if (hasActiveSurrenderVote(room)) throw new Error("认猪投票中，暂时不能出牌");
   if (round.currentPlayer !== seat) throw new Error("还没轮到你出牌");
 
   const legal = getLegalCardIds(round, seat);
@@ -1242,6 +1331,60 @@ function playCard(room, seat, cardId, options = {}) {
     round.currentPlayer = (round.currentPlayer + 1) % playerCount;
   }
   updateScorePreview(round);
+}
+
+function requestSurrender(room, seat) {
+  const round = room.round;
+  if (!round || round.phase !== "play") throw new Error("只有出牌阶段可以认猪");
+  if (round.pendingTrickResolution) throw new Error("本墩正在结算，请稍等");
+  if (hasActiveSurrenderVote(room)) throw new Error("已经有认猪投票正在进行");
+  room.surrenderVote = null;
+  const player = room.players[seat];
+  if (!player) throw new Error("玩家不存在");
+  const playerCount = getRoundPlayerCount(round);
+  const voters = seatIndexes(playerCount).filter((candidate) => candidate !== seat);
+  room.surrenderVote = {
+    targetSeat: seat,
+    roundNumber: round.handNumber,
+    requiredApprovals: Math.floor(voters.length / 2) + 1,
+    approvals: new Set(),
+    rejections: new Set(),
+    voters,
+    createdAt: Date.now()
+  };
+  pushRoundMessage(room, `${player.name} 发起认猪投票，其他玩家过半同意后本局立即结束。`, round.handNumber);
+}
+
+function voteSurrender(room, seat, approve) {
+  const round = room.round;
+  const vote = room.surrenderVote;
+  if (!hasActiveSurrenderVote(room)) throw new Error("当前没有可投票的认猪");
+  if (seat === vote.targetSeat) throw new Error("认猪者不能参与投票");
+  if (!vote.voters.includes(seat)) throw new Error("你不能参与这次投票");
+  if (vote.approvals.has(seat) || vote.rejections.has(seat)) throw new Error("你已经投过票了");
+  if (approve) {
+    vote.approvals.add(seat);
+  } else {
+    vote.rejections.add(seat);
+  }
+  const voterName = room.players[seat]?.name || `玩家${seat + 1}`;
+  pushRoundMessage(room, `${voterName} ${approve ? "同意" : "不同意"}认猪。`, round.handNumber);
+  if (vote.approvals.size >= vote.requiredApprovals) {
+    finishRoundBySurrender(room, vote.targetSeat);
+    return;
+  }
+  const remaining = vote.voters.length - vote.approvals.size - vote.rejections.size;
+  if (vote.approvals.size + remaining < vote.requiredApprovals) {
+    const targetName = room.players[vote.targetSeat]?.name || `玩家${vote.targetSeat + 1}`;
+    room.surrenderVote = null;
+    pushRoundMessage(room, `${targetName} 认猪投票未通过，牌局继续。`, round.handNumber);
+  }
+}
+
+function hasActiveSurrenderVote(room) {
+  return Boolean(room.surrenderVote)
+    && room.round?.phase === "play"
+    && room.surrenderVote.roundNumber === room.round.handNumber;
 }
 
 function isCardExposedBy(round, cardId, seat) {
@@ -1294,6 +1437,30 @@ function finishRound(room) {
   }
   const pigNames = pigSeats.map((seat) => room.players[seat]?.name).filter(Boolean).join("、") || "无";
   pushRoundMessage(room, `本局结束：${scores.map((score, seat) => `${room.players[seat].name} ${formatScore(score)}`).join("，")}。本局当猪：${pigNames}。`);
+  room.surrenderVote = null;
+}
+
+function finishRoundBySurrender(room, targetSeat) {
+  const round = room.round;
+  const playerCount = getRoundPlayerCount(round);
+  const scores = zeroScores(playerCount);
+  round.scorePreview = scores;
+  round.finishedScores = scores;
+  round.pigSeats = [targetSeat];
+  round.phase = "finished";
+  round.currentPlayer = null;
+  round.pendingTrickResolution = null;
+  if (room.trickTimer) {
+    clearTimeout(room.trickTimer);
+    room.trickTimer = null;
+  }
+  room.players[targetSeat].pigCount = (room.players[targetSeat].pigCount || 0) + 1;
+  if (!Number.isInteger(room.pigKingSeat) && room.players[targetSeat].pigCount >= 3) {
+    room.pigKingSeat = targetSeat;
+  }
+  const targetName = room.players[targetSeat]?.name || `玩家${targetSeat + 1}`;
+  room.surrenderVote = null;
+  pushRoundMessage(room, `认猪投票通过，${targetName} 本局认猪判负。`, round.handNumber);
 }
 
 function getRoundPigSeats(round, scores = calculateScores(round)) {
@@ -1456,6 +1623,8 @@ module.exports = {
   exposeCards,
   finishExpose,
   finishRound,
+  requestSurrender,
+  voteSurrender,
   createRoom: createTestRoom,
   createGameServer,
   addPlayerToRoom,

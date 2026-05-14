@@ -89,6 +89,7 @@ function connectClient(url) {
 async function main() {
   await testProcessRestartRestore();
   await testPlayerCountModes();
+  await testSurrenderVoteFlow();
   await testFullGameFlow();
 }
 
@@ -295,6 +296,46 @@ async function testFullGameFlow() {
 async function testPlayerCountModes() {
   await testModeRoom(3, 17);
   await testModeRoom(5, 10);
+}
+
+async function testSurrenderVoteFlow() {
+  const { server, io, ready } = createGameServer({ trickSettleDelayMs: 10, exposeDurationMs: 20 });
+  await ready;
+  const port = await listen(server);
+  const url = `http://127.0.0.1:${port}`;
+  const clients = Array.from({ length: 4 }, () => connectClient(url));
+  try {
+    await Promise.all(clients.map((client) => client.connected));
+    const { code } = await clients[0].emit("createRoom", { name: "甲", clientId: "surrender-0" });
+    await clients[1].emit("joinRoom", { code, name: "乙", clientId: "surrender-1" });
+    await clients[2].emit("joinRoom", { code, name: "丙", clientId: "surrender-2" });
+    await clients[3].emit("joinRoom", { code, name: "丁", clientId: "surrender-3" });
+    await clients[0].emit("startGame");
+    await Promise.all(clients.map((client) => client.waitFor(
+      (state) => state.round?.phase === "expose",
+      "surrender expose"
+    )));
+    await Promise.all(clients.map((client) => client.waitFor(
+      (state) => state.round?.phase === "play",
+      "surrender play"
+    )));
+
+    await clients[2].emit("requestSurrender");
+    await clients[0].waitFor((state) => state.surrenderVote?.targetSeat === clients[2].state.me.seat, "surrender vote open");
+    await clients[0].emit("voteSurrender", { approve: true });
+    await clients[1].emit("voteSurrender", { approve: true });
+    await Promise.all(clients.map((client) => client.waitFor(
+      (state) => state.round?.phase === "finished" && state.round.pigSeats.includes(2),
+      "surrender finished"
+    )));
+    assert.equal(clients[2].state.players[2].pigCount, 1);
+    assert.equal(clients[0].state.surrenderVote, null);
+    console.log("surrender ok");
+  } finally {
+    for (const client of clients) client.socket.disconnect();
+    await io.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 async function testModeRoom(playerCount, handSize) {

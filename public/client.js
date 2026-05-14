@@ -37,6 +37,7 @@ const copyLinkButton = document.querySelector("#copy-link");
 const historyButton = document.querySelector("#history-button");
 const rulesButton = document.querySelector("#rules-button");
 const tableModeButton = document.querySelector("#table-mode-button");
+const surrenderButton = document.querySelector("#surrender-button");
 const pageSettingsButton = document.querySelector("#page-settings-button");
 const pageSettingsPanel = document.querySelector("#page-settings-panel");
 const uiScaleInput = document.querySelector("#ui-scale");
@@ -107,6 +108,16 @@ startButton.addEventListener("click", () => {
 newRoundButton.addEventListener("click", () => {
   selectedExpose.clear();
   emitAction("newRound", {});
+});
+
+surrenderButton?.addEventListener("click", () => {
+  if (!state?.round || state.round.phase !== "play") return;
+  if (state.surrenderVote?.targetSeat === state.me?.seat) {
+    statusLine.textContent = "认猪投票已经发起，等其他玩家表态。";
+    return;
+  }
+  if (!window.confirm("确认发起认猪？其他玩家过半同意后，本局会立刻结束并判你当猪。")) return;
+  emitAction("requestSurrender", {});
 });
 
 copyLinkButton.addEventListener("click", async () => {
@@ -218,14 +229,15 @@ reducedMotionToggle?.addEventListener("change", () => {
 });
 
 settingsResetButton?.addEventListener("click", () => {
-  localStorage.setItem(activeScaleKey(), "100");
-  localStorage.setItem(MOBILE_PAGE_ZOOM_KEY, "100");
-  localStorage.setItem(TABLE_SIZE_KEY, "100");
+  const defaults = defaultSettings();
+  localStorage.setItem(activeScaleKey(), String(defaults.uiScale));
+  localStorage.setItem(MOBILE_PAGE_ZOOM_KEY, String(defaults.mobilePageScale));
+  localStorage.setItem(TABLE_SIZE_KEY, String(defaults.tableSize));
   localStorage.setItem(TABLE_THEME_KEY, "classic");
   localStorage.setItem(REDUCED_MOTION_KEY, "0");
-  applyUiScale(100);
-  applyMobilePageScale(100);
-  applyTableSize(100);
+  applyUiScale(defaults.uiScale);
+  applyMobilePageScale(defaults.mobilePageScale);
+  applyTableSize(defaults.tableSize);
   applyTableTheme("classic");
   applyReducedMotion(false);
   renderSlots();
@@ -308,15 +320,15 @@ function getClientId() {
 }
 
 function getSavedUiScale() {
-  return clampScale(localStorage.getItem(activeScaleKey()) || defaultPageZoom());
+  return clampScale(localStorage.getItem(activeScaleKey()) || defaultSettings().uiScale);
 }
 
 function getSavedMobilePageScale() {
-  return clampMobilePageScale(localStorage.getItem(MOBILE_PAGE_ZOOM_KEY) || defaultPageZoom());
+  return clampMobilePageScale(localStorage.getItem(MOBILE_PAGE_ZOOM_KEY) || defaultSettings().mobilePageScale);
 }
 
 function getSavedTableSize() {
-  return clampTableSize(localStorage.getItem(TABLE_SIZE_KEY) || defaultPageZoom());
+  return clampTableSize(localStorage.getItem(TABLE_SIZE_KEY) || defaultSettings().tableSize);
 }
 
 function getSavedTableTheme() {
@@ -327,8 +339,10 @@ function getSavedReducedMotion() {
   return localStorage.getItem(REDUCED_MOTION_KEY) === "1";
 }
 
-function defaultPageZoom() {
-  return 100;
+function defaultSettings() {
+  return MOBILE_QUERY.matches
+    ? { uiScale: 140, mobilePageScale: 80, tableSize: 100 }
+    : { uiScale: 90, mobilePageScale: 100, tableSize: 100 };
 }
 
 function activeScaleKey() {
@@ -499,6 +513,7 @@ function render() {
   renderScores();
   renderSlots();
   renderMyTableScorePanel();
+  renderSurrenderVotePanel();
   renderTrick();
   renderHand();
   renderSidePanel();
@@ -526,6 +541,14 @@ function renderTopbar() {
   startButton.disabled = !isHost || playerCount !== targetCount;
   newRoundButton.classList.toggle("hidden", phase !== "finished");
   newRoundButton.disabled = !isHost;
+  const canSurrender = Boolean(state.me) && phase === "play" && !state.round?.settlingTrick;
+  surrenderButton?.classList.toggle("hidden", !canSurrender);
+  if (surrenderButton) {
+    surrenderButton.disabled = Boolean(state.surrenderVote);
+    surrenderButton.textContent = state.surrenderVote?.targetSeat === state.me?.seat
+      ? "已认猪"
+      : (state.surrenderVote ? "投票中" : "认猪");
+  }
 }
 
 function renderScores() {
@@ -691,6 +714,43 @@ function renderMyTableScorePanel() {
   tableWrap.appendChild(panel);
 }
 
+function renderSurrenderVotePanel() {
+  if (!tableWrap) return;
+  tableWrap.querySelector(".surrender-vote-panel")?.remove();
+  const vote = state?.surrenderVote;
+  if (!vote || state.round?.phase !== "play") return;
+  const target = state.players[vote.targetSeat];
+  if (!target) return;
+  const voters = vote.voters || [];
+  const approvals = new Set(vote.approvals || []);
+  const rejections = new Set(vote.rejections || []);
+  const meSeat = state.me?.seat;
+  const canVote = Number.isInteger(meSeat)
+    && meSeat !== vote.targetSeat
+    && voters.includes(meSeat)
+    && !approvals.has(meSeat)
+    && !rejections.has(meSeat);
+  const panel = document.createElement("div");
+  panel.className = "surrender-vote-panel";
+  panel.innerHTML = `
+    <div>
+      <strong>${escapeHtml(target.name || "玩家")} 发起认猪</strong>
+      <span>同意 ${approvals.size}/${vote.requiredApprovals || 1}</span>
+    </div>
+    <div class="surrender-vote-actions">
+      <button type="button" data-vote="yes" ${canVote ? "" : "disabled"}>同意</button>
+      <button type="button" class="secondary" data-vote="no" ${canVote ? "" : "disabled"}>不同意</button>
+    </div>
+  `;
+  panel.querySelector("[data-vote='yes']")?.addEventListener("click", () => {
+    emitAction("voteSurrender", { approve: true });
+  });
+  panel.querySelector("[data-vote='no']")?.addEventListener("click", () => {
+    emitAction("voteSurrender", { approve: false });
+  });
+  tableWrap.appendChild(panel);
+}
+
 function renderTrick() {
   if (!state) return;
   trickArea.innerHTML = "";
@@ -706,7 +766,9 @@ function renderTrick() {
   }
 
   const phase = state.round?.phase;
-  if (state.round?.settlingTrick) {
+  if (phase === "play" && state.surrenderVote) {
+    statusLine.textContent = "认猪投票中";
+  } else if (state.round?.settlingTrick) {
     statusLine.textContent = "本墩结算中";
   } else if (phase === "play" && state.me?.seat === state.round?.currentPlayer) {
     statusLine.textContent = "轮到你出牌";
@@ -903,7 +965,7 @@ function slotPoint(index, count) {
 
 function mobileSeatSpread() {
   if (!MOBILE_QUERY.matches) return 1;
-  const value = Number.parseInt(uiScaleInput?.value || defaultPageZoom(), 10);
+  const value = Number.parseInt(uiScaleInput?.value || defaultSettings().uiScale, 10);
   if (!Number.isFinite(value)) return 1;
   const base = Math.min(1, Math.max(0, (value - 90) / 30));
   const extra = value > 120 ? Math.min(0.4, (value - 120) / 125) : 0;
@@ -1193,6 +1255,7 @@ function openRules() {
       <div><strong>分牌</strong><span>黑桃 Q -100，羊 +100，红桃 5-A 为负分，变压器单收 +50。</span></div>
       <div><strong>全红</strong><span>收齐全部红桃转为 +200；红桃 A 被卖后为 +400。</span></div>
       <div><strong>当猪</strong><span>每局最终分数最低者当猪；并列最低一起当猪；有人收全红时，其余三人当猪。</span></div>
+      <div><strong>认猪</strong><span>出牌阶段可发起认猪投票，其余玩家过半同意后本局立即结束，认猪者当猪。</span></div>
       <div><strong>模式</strong><span>创建房间时可选择三人、四人或五人模式；三人移除梅花 2，五人移除梅花 2 和方块 2。</span></div>
       <div><strong>互动</strong><span>点击玩家窗口里的鸡蛋或点赞，全场会看到从你飞向对方的动画。</span></div>
       <div><strong>嘉铭赞助</strong><span>本桌由嘉铭冠名赞助，输赢各凭牌技。</span></div>

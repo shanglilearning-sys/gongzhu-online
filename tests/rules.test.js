@@ -8,6 +8,8 @@ const {
   finishExpose,
   exposeCards,
   finishRound,
+  requestSurrender,
+  voteSurrender,
   getRoundPigSeats
 } = require("../server");
 
@@ -223,6 +225,33 @@ function testPigKingLocksFirstSeatToThree() {
   assert.equal(room.pigKingSeat, 1);
 }
 
+function testSurrenderVoteEndsRound() {
+  const room = createRoom("a", "甲");
+  room.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", pigCount: 0, connected: true });
+  room.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", pigCount: 0, connected: true });
+  room.players.push({ socketId: "d", clientId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", pigCount: 0, connected: true });
+  room.phase = "playing";
+  room.round = finishableRound([
+    [card("DJ")],
+    [card("SQ"), card("H5")],
+    [card("H6")],
+    [card("C10")]
+  ]);
+
+  requestSurrender(room, 2);
+  assert.equal(room.surrenderVote.targetSeat, 2);
+  assert.equal(room.surrenderVote.requiredApprovals, 2);
+
+  voteSurrender(room, 0, true);
+  assert.equal(room.round.phase, "play");
+  voteSurrender(room, 1, true);
+
+  assert.equal(room.round.phase, "finished");
+  assert.deepEqual(room.round.pigSeats, [2]);
+  assert.equal(room.players[2].pigCount, 1);
+  assert.equal(room.surrenderVote, null);
+}
+
 function testTiedLowestPigCount() {
   assert.deepEqual(getRoundPigSeats({ taken: [[], [], [], []] }, [-20, 30, -20, 10]), [0, 2]);
 }
@@ -243,6 +272,7 @@ testVariablePlayerCounts();
 testBloodLock();
 testPigCount();
 testPigKingLocksFirstSeatToThree();
+testSurrenderVoteEndsRound();
 testTiedLowestPigCount();
 testAllHeartsMakesOthersPigs();
 console.log("rules ok");
