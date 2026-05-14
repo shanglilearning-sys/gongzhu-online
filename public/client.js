@@ -19,6 +19,7 @@ const TABLE_THEMES = new Set(["classic", "star", "plum", "bamboo"]);
 
 let state = null;
 let selectedExpose = new Set();
+let selectedPlayCardId = null;
 const clientId = getClientId();
 
 const entry = document.querySelector("#entry");
@@ -59,6 +60,7 @@ const playerSlots = document.querySelector("#player-slots");
 const handTitle = document.querySelector("#hand-title");
 const handEl = document.querySelector("#hand");
 const exposeButton = document.querySelector("#expose-button");
+const finishExposeButton = document.querySelector("#finish-expose-button");
 const exposedList = document.querySelector("#exposed-list");
 const scorePreview = document.querySelector("#score-preview");
 const messages = document.querySelector("#messages");
@@ -72,7 +74,6 @@ const chatInput = document.querySelector("#chat-input");
 
 let resumeInFlight = false;
 let tableModeEnabled = false;
-let serverTimeOffset = 0;
 
 const params = new URLSearchParams(window.location.search);
 if (params.get("room")) {
@@ -107,6 +108,7 @@ startButton.addEventListener("click", () => {
 
 newRoundButton.addEventListener("click", () => {
   selectedExpose.clear();
+  selectedPlayCardId = null;
   emitAction("newRound", {});
 });
 
@@ -138,6 +140,10 @@ exposeButton.addEventListener("click", () => {
   const cardIds = [...selectedExpose];
   if (!cardIds.length) return;
   emitAction("exposeCards", { cardIds }, () => selectedExpose.clear());
+});
+
+finishExposeButton?.addEventListener("click", () => {
+  emitAction("finishExpose", {}, () => selectedExpose.clear());
 });
 
 historyButton.addEventListener("click", () => {
@@ -265,7 +271,9 @@ MOBILE_QUERY.addEventListener?.("change", () => {
 
 socket.on("state", (nextState) => {
   state = nextState;
-  serverTimeOffset = (nextState.round?.serverNow || Date.now()) - Date.now();
+  if (selectedPlayCardId && !(nextState.hand || []).some((card) => card.id === selectedPlayCardId)) {
+    selectedPlayCardId = null;
+  }
   localStorage.setItem("gongzhuLastRoom", nextState.code);
   entry.classList.add("hidden");
   game.classList.remove("hidden");
@@ -275,6 +283,7 @@ socket.on("state", (nextState) => {
 socket.on("kicked", ({ message } = {}) => {
   state = null;
   selectedExpose.clear();
+  selectedPlayCardId = null;
   entry.classList.remove("hidden");
   game.classList.add("hidden");
   entryError.textContent = message || "你已被房主移出房间。";
@@ -300,12 +309,6 @@ socket.on("chatMessage", (chat) => {
 socket.on("playerReaction", (reaction) => {
   showReaction(reaction);
 });
-
-setInterval(() => {
-  if (state?.round?.phase !== "expose") return;
-  renderTopbar();
-  renderTrick();
-}, 250);
 
 function getName() {
   const name = nameInput.value.trim() || "玩家";
@@ -565,7 +568,7 @@ function renderTopbar() {
   } else if (phase === "expose") {
     phaseTitle.textContent = isSpectator()
       ? `观众视角 · 卖牌阶段`
-      : `卖牌阶段 · ${exposeCountdownSeconds()} 秒后开打`;
+      : `卖牌阶段 · 等待玩家确认`;
   } else if (phase === "play") {
     phaseTitle.textContent = current
       ? `${isSpectator() ? "观众视角 · " : ""}轮到 ${current.name} 出牌`
@@ -818,7 +821,7 @@ function renderTrick() {
   } else if (phase === "play" && state.me?.seat === state.round?.currentPlayer) {
     statusLine.textContent = "轮到你出牌";
   } else if (phase === "expose") {
-    statusLine.innerHTML = `<span class="countdown-pill">卖牌倒计时 <strong>${exposeCountdownSeconds()}</strong> 秒</span>`;
+    statusLine.textContent = exposeStatusText();
   } else if (phase === "finished") {
     statusLine.textContent = "房主可以开始下一局";
   } else if (state.phase === "lobby") {
@@ -854,15 +857,21 @@ function renderHand() {
   const hand = sortHandForUse(state.hand || [], legal, exposable, phase);
   handTitle.textContent = state.me ? `${state.me.directionLabel}家 · ${hand.length} 张` : "旁观中";
 
-  exposeButton.classList.toggle("hidden", phase !== "expose" || exposable.size === 0);
-  exposeButton.disabled = selectedExpose.size === 0;
+  const exposeDone = isMyExposeDone();
+  exposeButton.classList.toggle("hidden", phase !== "expose" || exposable.size === 0 || exposeDone);
+  exposeButton.disabled = exposeDone || selectedExpose.size === 0;
+  finishExposeButton?.classList.toggle("hidden", phase !== "expose");
+  if (finishExposeButton) {
+    finishExposeButton.disabled = exposeDone;
+    finishExposeButton.textContent = exposeDone ? "已结束卖牌" : "结束卖牌";
+  }
 
   hand.forEach((card, index) => {
     const canPlay = phase === "play" && legal.has(card.id);
     const canExpose = phase === "expose" && exposable.has(card.id);
     const cardEl = makeCard(card, {
       disabled: phase === "play" ? !canPlay : !canExpose,
-      selected: selectedExpose.has(card.id),
+      selected: selectedExpose.has(card.id) || selectedPlayCardId === card.id,
       exposable: canExpose,
       legal: canPlay
     });
@@ -877,7 +886,14 @@ function renderHand() {
         return;
       }
       if (phase === "play" && canPlay) {
-        emitAction("playCard", { cardId: card.id });
+        if (selectedPlayCardId !== card.id) {
+          selectedPlayCardId = card.id;
+          renderHand();
+          return;
+        }
+        emitAction("playCard", { cardId: card.id }, () => {
+          selectedPlayCardId = null;
+        });
       }
     });
     handEl.appendChild(cardEl);
@@ -887,6 +903,8 @@ function renderHand() {
 function renderSpectatorHands() {
   exposeButton.classList.add("hidden");
   exposeButton.disabled = true;
+  finishExposeButton?.classList.add("hidden");
+  if (finishExposeButton) finishExposeButton.disabled = true;
   const allHands = Array.isArray(state.allHands) ? state.allHands : [];
   const phase = state.round?.phase;
   const handCount = allHands.reduce((sum, hand) => sum + (Array.isArray(hand) ? hand.length : 0), 0);
@@ -1032,7 +1050,7 @@ function slotPoint(index, count) {
   if (tableModeEnabled && index === 0) {
     return { x: 50, y: window.innerWidth <= 640 ? 78 : 82 };
   }
-  const angle = (Math.PI / 2) + (Math.PI * 2 * index / count);
+  const angle = (Math.PI / 2) - (Math.PI * 2 * index / count);
   const xRadius = count === 5 ? 43 : 41;
   const yRadius = tableModeEnabled ? 43 : (index === 0 ? 37 : 39);
   const spread = mobileSeatSpread();
@@ -1099,6 +1117,22 @@ function isSpectator() {
   return state?.role === "spectator";
 }
 
+function exposeDoneSeats() {
+  return new Set(state?.round?.exposeDoneSeats || []);
+}
+
+function isMyExposeDone() {
+  return Number.isInteger(state?.me?.seat) && exposeDoneSeats().has(state.me.seat);
+}
+
+function exposeStatusText() {
+  const done = exposeDoneSeats().size;
+  const total = playerCountForState();
+  if (isSpectator()) return `卖牌确认 ${done}/${total}`;
+  if (isMyExposeDone()) return `你已结束卖牌，等待其他玩家 ${done}/${total}`;
+  return `可选择卖牌，确认后点击结束卖牌 ${done}/${total}`;
+}
+
 function canKickSeat(seat) {
   return Boolean(state?.phase === "lobby"
     && isHostMe()
@@ -1161,13 +1195,6 @@ function formatScore(score) {
 
 function currentRoundScore(seat) {
   return state?.round?.scorePreview?.[seat] ?? state?.round?.finishedScores?.[seat] ?? 0;
-}
-
-function exposeCountdownSeconds() {
-  const endsAt = Number(state?.round?.exposeEndsAt || 0);
-  if (!endsAt) return 0;
-  const now = Date.now() + serverTimeOffset;
-  return Math.max(0, Math.ceil((endsAt - now) / 1000));
 }
 
 function sortHandForUse(hand, legal, exposable, phase) {
@@ -1369,7 +1396,7 @@ function openRules() {
   modalTitle.textContent = "规则速查";
   modalBody.innerHTML = `
     <div class="rules-grid">
-      <div><strong>卖牌</strong><span>开局 8 秒内可卖猪、羊、变压器、红桃 A，倒计时结束后自动开打。</span></div>
+      <div><strong>卖牌</strong><span>开局后可卖猪、羊、变压器、红桃 A，所有玩家点击结束卖牌后开打。</span></div>
       <div><strong>首出</strong><span>持黑桃 2 的玩家首出，第一墩必须先出黑桃 2。</span></div>
       <div><strong>跟牌</strong><span>必须跟首出花色，没有该花色时可以垫任意牌。</span></div>
       <div><strong>分牌</strong><span>黑桃 Q -100，羊 +100，红桃 5-A 为负分，变压器单收 +50。</span></div>

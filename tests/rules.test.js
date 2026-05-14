@@ -6,6 +6,7 @@ const {
   playCard,
   createRoom,
   finishExpose,
+  finishExposeForPlayer,
   exposeCards,
   finishRound,
   requestSurrender,
@@ -107,6 +108,24 @@ function testRoomFlow() {
   assert.deepEqual(getLegalCardIds(room.round, starter), ["S2"]);
   playCard(room, starter, "S2");
   assert.equal(room.round.trick.length, 1);
+  assert.equal(room.round.currentPlayer, (starter + 1) % 4);
+}
+
+function testManualExposeFinish() {
+  const room = createRoom("a", "甲");
+  room.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", pigCount: 0, connected: true });
+  room.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", pigCount: 0, connected: true });
+  room.players.push({ socketId: "d", clientId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", pigCount: 0, connected: true });
+
+  startRound(room);
+  for (let seat = 0; seat < 3; seat += 1) {
+    finishExposeForPlayer(room, seat);
+    assert.equal(room.round.phase, "expose");
+  }
+  assert.deepEqual(room.round.exposeDoneSeats, [0, 1, 2]);
+  finishExposeForPlayer(room, 3);
+  assert.equal(room.round.phase, "play");
+  assert.deepEqual(room.round.exposeDoneSeats, [0, 1, 2, 3]);
 }
 
 function testVariablePlayerCounts() {
@@ -268,6 +287,7 @@ function testAllHeartsMakesOthersPigs() {
 
 testScoring();
 testRoomFlow();
+testManualExposeFinish();
 testVariablePlayerCounts();
 testBloodLock();
 testPigCount();

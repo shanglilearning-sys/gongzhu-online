@@ -1184,6 +1184,13 @@ body.reduced-motion *::after {
   margin-bottom: 10px;
 }
 
+.hand-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .hand-heading h3 {
   font-size: 20px;
   line-height: 1.1;
@@ -1327,6 +1334,10 @@ body.reduced-motion *::after {
 .card.selected {
   transform: translateY(calc(-16px * var(--ui-scale)));
   outline: 3px solid var(--gold);
+  box-shadow:
+    0 0 0 4px rgba(224, 184, 90, 0.24),
+    0 0 28px rgba(245, 217, 133, 0.62),
+    0 18px 30px rgba(0, 0, 0, 0.3);
 }
 
 .card.exposable {
@@ -2161,10 +2172,21 @@ body.reduced-motion *::after {
 
   .hand-heading {
     margin-bottom: 6px;
+    align-items: flex-start;
   }
 
   .hand-heading h3 {
     font-size: 20px;
+  }
+
+  .hand-actions {
+    gap: 5px;
+  }
+
+  .hand-actions button {
+    min-height: 32px;
+    padding: 0 9px;
+    font-size: 12px;
   }
 
   .hand {

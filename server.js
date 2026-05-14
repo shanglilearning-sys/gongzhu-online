@@ -89,7 +89,6 @@ function createGameServer(options = {}) {
     .then((restoredRooms) => {
       for (const room of restoredRooms) {
         rooms.set(room.code, room);
-        scheduleExposeFinish(room);
         schedulePendingTrick(room);
         scheduleEmptyPlayingRoomCleanup(room);
       }
@@ -269,22 +268,6 @@ function createGameServer(options = {}) {
     }
   }
 
-  function scheduleExposeFinish(room) {
-    const round = room.round;
-    if (!round || round.phase !== "expose" || !round.exposeEndsAt || room.exposeTimer) return;
-    const delay = Math.max(0, round.exposeEndsAt - Date.now());
-    room.exposeTimer = setTimeout(() => {
-      room.exposeTimer = null;
-      if (room.round?.phase !== "expose") {
-        persistRooms();
-        return;
-      }
-      finishExpose(room);
-      emitRoom(room);
-      persistRooms();
-    }, delay);
-  }
-
   function close() {
     isShuttingDown = true;
     clearTimeout(persistTimer);
@@ -372,7 +355,6 @@ function createGameServer(options = {}) {
         if (!room) throw new Error("请先进入房间");
         if (room.hostId !== socket.id) throw new Error("只有房主能开始");
         startRound(room, { exposeDurationMs });
-        scheduleExposeFinish(room);
         persistRooms();
         emitRoom(room);
         callback({ ok: true });
@@ -413,7 +395,11 @@ function createGameServer(options = {}) {
       try {
         const room = getRoomForSocket(socket);
         if (!room) throw new Error("请先进入房间");
-        throw new Error("卖牌会在倒计时结束后自动开始出牌");
+        const player = assertPlayer(socket, room);
+        finishExposeForPlayer(room, player.seat);
+        persistRooms();
+        emitRoom(room);
+        callback({ ok: true });
       } catch (error) {
         callback({ ok: false, error: error.message });
       }
@@ -469,7 +455,6 @@ function createGameServer(options = {}) {
         if (room.hostId !== socket.id) throw new Error("只有房主能开新局");
         if (room.round?.phase !== "finished") throw new Error("本局结束后才能开新局");
         startRound(room, { exposeDurationMs });
-        scheduleExposeFinish(room);
         persistRooms();
         emitRoom(room);
         callback({ ok: true });
@@ -739,6 +724,9 @@ function roundToSnapshot(round) {
     }))
   } : null;
   snapshot.pigSeats = Array.isArray(round.pigSeats) ? round.pigSeats.slice(0, getRoundPlayerCount(round)) : [];
+  snapshot.exposeDoneSeats = Array.isArray(round.exposeDoneSeats)
+    ? round.exposeDoneSeats.slice(0, getRoundPlayerCount(round))
+    : [];
   return snapshot;
 }
 
@@ -867,7 +855,8 @@ function roundFromSnapshot(snapshot, playerCount = 4) {
     pendingTrickResolution: snapshot.pendingTrickResolution?.resolveAt
       ? { resolveAt: snapshot.pendingTrickResolution.resolveAt }
       : null,
-    exposeEndsAt: snapshot.exposeEndsAt || null,
+    exposeEndsAt: null,
+    exposeDoneSeats: normalizeSeatList(snapshot.exposeDoneSeats, playerCount),
     trickNumber: snapshot.trickNumber || 1,
     lastTrick: snapshot.lastTrick ? {
       winner: snapshot.lastTrick.winner,
@@ -1185,6 +1174,7 @@ function publicRound(round) {
     exposed: round.exposed,
     protectedSuits: round.protectedSuits,
     trickNumber: round.trickNumber,
+    exposeDoneSeats: Array.isArray(round.exposeDoneSeats) ? round.exposeDoneSeats.slice(0, playerCount) : [],
     lastTrick: round.lastTrick,
     scorePreview: Array.isArray(round.scorePreview) ? round.scorePreview.slice(0, playerCount) : zeroScores(playerCount),
     finishedScores: Array.isArray(round.finishedScores) ? round.finishedScores.slice(0, playerCount) : null,
@@ -1333,7 +1323,8 @@ function startRound(room, options = {}) {
     trickLeadSuit: null,
     trick: [],
     pendingTrickResolution: null,
-    exposeEndsAt: Date.now() + Math.max(0, Number(options.exposeDurationMs ?? DEFAULT_EXPOSE_DURATION_MS)),
+    exposeEndsAt: null,
+    exposeDoneSeats: [],
     trickNumber: 1,
     lastTrick: null,
     heartsSeen: false,
@@ -1356,6 +1347,7 @@ function getExposableCardIds(round, seat) {
 function exposeCards(room, seat, cardIds) {
   const round = room.round;
   if (!round || round.phase !== "expose") throw new Error("现在不能卖牌");
+  if (round.exposeDoneSeats?.includes(seat)) throw new Error("你已经结束卖牌");
 
   const valid = new Set(getExposableCardIds(round, seat));
   const ids = Array.isArray(cardIds) ? cardIds : [];
@@ -1369,6 +1361,22 @@ function exposeCards(room, seat, cardIds) {
   }
 }
 
+function finishExposeForPlayer(room, seat) {
+  const round = room.round;
+  if (!round || round.phase !== "expose") throw new Error("现在不能结束卖牌");
+  const playerCount = getRoundPlayerCount(round);
+  if (!Number.isInteger(seat) || seat < 0 || seat >= playerCount) throw new Error("玩家不存在");
+  round.exposeDoneSeats ||= [];
+  if (!round.exposeDoneSeats.includes(seat)) {
+    round.exposeDoneSeats.push(seat);
+    round.exposeDoneSeats.sort((a, b) => a - b);
+    pushRoundMessage(room, `${room.players[seat].name} 已结束卖牌。`);
+  }
+  if (round.exposeDoneSeats.length >= playerCount) {
+    finishExpose(room);
+  }
+}
+
 function finishExpose(room) {
   const round = room.round;
   if (!round || round.phase !== "expose") throw new Error("现在不能开始出牌");
@@ -1378,6 +1386,7 @@ function finishExpose(room) {
   }
   round.phase = "play";
   round.exposeEndsAt = null;
+  round.exposeDoneSeats = seatIndexes(getRoundPlayerCount(round));
   pushRoundMessage(room, "卖牌结束，开始出牌。");
 }
 
@@ -1746,6 +1755,7 @@ module.exports = {
   playCard,
   exposeCards,
   finishExpose,
+  finishExposeForPlayer,
   finishRound,
   requestSurrender,
   voteSurrender,

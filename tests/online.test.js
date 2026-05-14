@@ -228,11 +228,33 @@ async function testFullGameFlow() {
     for (const client of clients) {
       await client.emit("exposeCards", { cardIds: client.state.canExpose });
     }
+    await clients[0].emit("finishExpose");
+    await clients[0].waitFor(
+      (state) => state.round?.phase === "expose" && state.round.exposeDoneSeats?.length === 1,
+      "first expose done"
+    );
+    assert.equal(clients[0].state.round.phase, "expose");
+    for (let index = 1; index < clients.length; index += 1) {
+      await clients[index].emit("finishExpose");
+    }
 
     await Promise.all(clients.map((client) => client.waitFor(
       (state) => state.round?.phase === "play",
       "play phase"
     )));
+    const starter = clients[0].state.round.starter;
+    const starterClient = clients.find((client) => client.state.me?.seat === starter);
+    await starterClient.waitFor(
+      (state) => state.round?.phase === "play"
+        && state.round.currentPlayer === starter
+        && state.legalPlays.includes("S2"),
+      "starter has S2"
+    );
+    await starterClient.emit("playCard", { cardId: "S2" });
+    await clients[0].waitFor(
+      (state) => state.round?.currentPlayer === ((starter + 1) % 4),
+      "counter-clockwise next player"
+    );
 
     const reactionSeen = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("Timed out waiting for player reaction")), 1000);
@@ -498,6 +520,9 @@ async function testSurrenderVoteFlow() {
       (state) => state.round?.phase === "expose",
       "surrender expose"
     )));
+    for (const client of clients) {
+      await client.emit("finishExpose");
+    }
     await Promise.all(clients.map((client) => client.waitFor(
       (state) => state.round?.phase === "play",
       "surrender play"
