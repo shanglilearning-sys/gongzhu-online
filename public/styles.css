@@ -762,9 +762,28 @@ body.table-mode-active {
 .slot-alert {
   color: rgba(255, 250, 240, 0.68);
   font-size: 12px;
+  line-height: 1.25;
+}
+
+.slot-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  min-width: 0;
+}
+
+.slot-meta span,
+.slot-alert {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.slot-pig-title {
+  margin-left: 4px;
+  color: #ffd67a;
+  font-weight: 950;
+  text-shadow: 0 0 10px rgba(255, 196, 91, 0.34);
 }
 
 .slot-actions {
@@ -1539,7 +1558,7 @@ body.table-mode-active {
   }
 
   .player-slot {
-    width: clamp(124px, calc(134px * var(--ui-scale)), 148px);
+    width: clamp(112px, calc(124px * var(--ui-scale)), 138px);
     min-height: calc(74px * var(--ui-scale));
     padding: calc(7px * var(--ui-scale));
     gap: 3px;
@@ -1613,7 +1632,7 @@ body.table-mode-active {
   }
 
   .game-screen.table-mode .player-slot {
-    width: clamp(112px, calc(124px * var(--ui-scale)), 138px);
+    width: clamp(108px, calc(118px * var(--ui-scale)), 130px);
   }
 
   .game-screen.table-mode .table-exposed-badge {

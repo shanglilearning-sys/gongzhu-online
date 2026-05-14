@@ -145,6 +145,15 @@ uiScaleInput?.addEventListener("input", () => {
   const value = clampScale(uiScaleInput.value);
   localStorage.setItem(UI_SCALE_KEY, String(value));
   applyUiScale(value);
+  renderSlots();
+});
+
+window.addEventListener("resize", () => {
+  renderSlots();
+});
+
+screen.orientation?.addEventListener?.("change", () => {
+  renderSlots();
 });
 
 socket.on("state", (nextState) => {
@@ -322,6 +331,7 @@ function renderScores() {
 }
 
 function renderSlots() {
+  if (!state) return;
   renderTableExposedBadge();
   const seats = orderedSeatsForView();
   playerSlots.innerHTML = "";
@@ -335,6 +345,11 @@ function renderSlots() {
     slot.style.setProperty("--seat-y", `${point.y}%`);
     const player = state.players[seat];
     const currentScore = currentRoundScore(seat);
+    const pigCount = Math.max(0, Number.parseInt(player?.pigCount || 0, 10));
+    const pigTitle = pigCount > 3 ? `<span class="slot-pig-title">猪王</span>` : "";
+    const slotMeta = player
+      ? `<span>当前分数 ${formatScore(currentScore)}</span><span>当猪 ${pigCount} 局${pigTitle}</span>`
+      : "等待加入";
     slot.classList.toggle("current", state.round?.currentPlayer === seat);
     slot.classList.toggle("me", state.me?.seat === seat);
     slot.classList.toggle("offline", player?.connected === false);
@@ -353,7 +368,7 @@ function renderSlots() {
         <span class="slot-seat">${player?.directionLabel || seat + 1}</span>
         <span class="slot-name">${escapeHtml(player?.name || "空位")}</span>
       </div>
-      <div class="slot-meta">${player ? `当前分数 ${formatScore(currentScore)}` : "等待加入"}</div>
+      <div class="slot-meta">${slotMeta}</div>
       ${player ? `
         <div class="slot-actions" aria-label="玩家互动">
           <button type="button" class="reaction-button" data-reaction="egg" title="投鸡蛋">鸡蛋</button>
@@ -544,16 +559,29 @@ function seatAngle(relative) {
 }
 
 function slotPoint(index, count) {
-  if (tableModeEnabled && index === 0) {
-    return { x: 50, y: window.innerWidth <= 640 ? 78 : 82 };
-  }
-  const angle = (Math.PI / 2) + (Math.PI * 2 * index / count);
-  const xRadius = count === 5 ? 43 : 41;
-  const yRadius = tableModeEnabled ? 43 : (index === 0 ? 37 : 39);
-  return {
-    x: 50 + Math.cos(angle) * xRadius,
-    y: 50 + Math.sin(angle) * yRadius
+  const isCompactScreen = window.innerWidth <= 640 || window.innerHeight <= 520;
+  const seatMaps = {
+    3: {
+      desktop: [{ x: 50, y: 86 }, { x: 84, y: 42 }, { x: 16, y: 42 }],
+      mobile: [{ x: 50, y: 84 }, { x: 76, y: 42 }, { x: 24, y: 42 }],
+      table: [{ x: 50, y: 82 }, { x: 84, y: 40 }, { x: 16, y: 40 }],
+      tableCompact: [{ x: 50, y: 76 }, { x: 78, y: 42 }, { x: 22, y: 42 }]
+    },
+    4: {
+      desktop: [{ x: 50, y: 86 }, { x: 84, y: 50 }, { x: 50, y: 14 }, { x: 16, y: 50 }],
+      mobile: [{ x: 50, y: 84 }, { x: 76, y: 50 }, { x: 50, y: 16 }, { x: 24, y: 50 }],
+      table: [{ x: 50, y: 82 }, { x: 84, y: 50 }, { x: 50, y: 14 }, { x: 16, y: 50 }],
+      tableCompact: [{ x: 50, y: 76 }, { x: 78, y: 50 }, { x: 50, y: 20 }, { x: 22, y: 50 }]
+    },
+    5: {
+      desktop: [{ x: 50, y: 86 }, { x: 84, y: 63 }, { x: 72, y: 15 }, { x: 28, y: 15 }, { x: 16, y: 63 }],
+      mobile: [{ x: 50, y: 84 }, { x: 76, y: 63 }, { x: 70, y: 18 }, { x: 30, y: 18 }, { x: 24, y: 63 }],
+      table: [{ x: 50, y: 82 }, { x: 84, y: 63 }, { x: 72, y: 15 }, { x: 28, y: 15 }, { x: 16, y: 63 }],
+      tableCompact: [{ x: 50, y: 76 }, { x: 78, y: 62 }, { x: 70, y: 22 }, { x: 30, y: 22 }, { x: 22, y: 62 }]
+    }
   };
+  const mode = tableModeEnabled ? (isCompactScreen ? "tableCompact" : "table") : (isCompactScreen ? "mobile" : "desktop");
+  return seatMaps[count]?.[mode]?.[index] || { x: 50, y: 50 };
 }
 
 function renderPigMarks(count, options = {}) {
