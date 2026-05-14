@@ -817,10 +817,12 @@ body.table-mode-active {
 .status-line {
   position: absolute;
   z-index: 5;
-  left: 14px;
-  bottom: clamp(86px, calc(96px * var(--ui-scale)), 116px);
+  left: 50%;
+  bottom: clamp(12px, calc(16px * var(--ui-scale)), 22px);
+  transform: translateX(-50%);
   min-height: 32px;
-  max-width: min(300px, calc(100% - 28px));
+  width: max-content;
+  max-width: min(360px, calc(100% - 28px));
   border: 1px solid rgba(255, 238, 202, 0.18);
   border-radius: 999px;
   background: rgba(4, 22, 15, 0.54);
@@ -1608,20 +1610,20 @@ body.reduced-motion *::after {
 @keyframes softPulse {
   0%,
   100% {
-    transform: translateY(0);
+    transform: translateX(-50%) translateY(0);
   }
   50% {
-    transform: translateY(-1px);
+    transform: translateX(-50%) translateY(-1px);
   }
 }
 
 @keyframes mobileStatusPulse {
   0%,
   100% {
-    transform: translate(-50%, -50%);
+    transform: translateX(-50%) translateY(0);
   }
   50% {
-    transform: translate(-50%, calc(-50% - 1px));
+    transform: translateX(-50%) translateY(-1px);
   }
 }
 
@@ -1839,16 +1841,17 @@ body.reduced-motion *::after {
   }
 
   .status-line {
-    left: 9px;
+    left: 50%;
     top: auto;
-    bottom: 78px;
+    bottom: 10px;
     z-index: 6;
     width: max-content;
     min-width: 132px;
     min-height: 30px;
-    max-width: 220px;
+    max-width: min(240px, calc(100% - 18px));
     padding: 6px 12px;
     font-size: 12px;
+    transform: translateX(-50%);
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
   }
 
@@ -1995,9 +1998,9 @@ body.reduced-motion *::after {
   }
 
   .game-screen.table-mode .status-line {
-    left: 8px;
-    bottom: 82px;
-    max-width: 210px;
+    left: 50%;
+    bottom: 10px;
+    max-width: min(230px, calc(100% - 18px));
   }
 
   .game-screen.table-mode .surrender-vote-panel {
