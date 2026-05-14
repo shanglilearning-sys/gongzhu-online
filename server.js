@@ -18,6 +18,7 @@ const DIRECTION_LABELS = ["南", "东", "北", "西"];
 const SPECIAL_CARDS = ["SQ", "DJ", "C10", "HA"];
 const SCORING_CARD_IDS = new Set(["SQ", "DJ", "C10", "H5", "H6", "H7", "H8", "H9", "H10", "HJ", "HQ", "HK", "HA"]);
 const DEFAULT_TRICK_SETTLE_DELAY_MS = Number.parseInt(process.env.TRICK_SETTLE_DELAY_MS || "1000", 10);
+const DEFAULT_EXPOSE_DURATION_MS = Number.parseInt(process.env.EXPOSE_DURATION_MS || "8000", 10);
 const INSTANCE_ID = `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const ROOM_SNAPSHOT_VERSION = 1;
 const DEFAULT_ROOM_STATE_KEY = "gongzhu:rooms:v1";
@@ -41,6 +42,9 @@ function createGameServer(options = {}) {
   const trickSettleDelayMs = Number.isFinite(options.trickSettleDelayMs)
     ? options.trickSettleDelayMs
     : DEFAULT_TRICK_SETTLE_DELAY_MS;
+  const exposeDurationMs = Number.isFinite(options.exposeDurationMs)
+    ? options.exposeDurationMs
+    : DEFAULT_EXPOSE_DURATION_MS;
 
   let persistQueue = Promise.resolve();
   const persistRooms = () => {
@@ -71,6 +75,7 @@ function createGameServer(options = {}) {
     .then((restoredRooms) => {
       for (const room of restoredRooms) {
         rooms.set(room.code, room);
+        scheduleExposeFinish(room);
         schedulePendingTrick(room);
       }
       if (restoredRooms.length > 0) {
@@ -163,8 +168,6 @@ function createGameServer(options = {}) {
     const player = room.players.find((candidate) => candidate.socketId === socketId);
     if (player) {
       player.connected = false;
-      player.voiceSpeakerEnabled = false;
-      player.voiceMicEnabled = false;
       pushMessage(room, `${player.name} 断开连接。`);
     }
     room.spectators = room.spectators.filter((candidate) => candidate.socketId !== socketId);
@@ -183,6 +186,7 @@ function createGameServer(options = {}) {
     }
 
     if (room.players.length === 0 && room.spectators.length === 0) {
+      clearExposeTimer(room);
       clearPendingTrickTimer(room);
       rooms.delete(code);
       persistRooms();
@@ -199,10 +203,37 @@ function createGameServer(options = {}) {
     }
   }
 
+  function clearExposeTimer(room) {
+    if (room?.exposeTimer) {
+      clearTimeout(room.exposeTimer);
+      room.exposeTimer = null;
+    }
+  }
+
+  function scheduleExposeFinish(room) {
+    const round = room.round;
+    if (!round || round.phase !== "expose" || !round.exposeEndsAt || room.exposeTimer) return;
+    const delay = Math.max(0, round.exposeEndsAt - Date.now());
+    room.exposeTimer = setTimeout(() => {
+      room.exposeTimer = null;
+      if (room.round?.phase !== "expose") {
+        persistRooms();
+        return;
+      }
+      finishExpose(room);
+      emitRoom(room);
+      persistRooms();
+    }, delay);
+  }
+
   function close() {
     isShuttingDown = true;
     clearTimeout(persistTimer);
     persistTimer = null;
+    for (const room of rooms.values()) {
+      clearExposeTimer(room);
+      clearPendingTrickTimer(room);
+    }
     const pending = persistQueue
       .catch(() => {})
       .then(() => persistence.save(rooms))
@@ -277,7 +308,8 @@ function createGameServer(options = {}) {
         const room = getRoomForSocket(socket);
         if (!room) throw new Error("请先进入房间");
         if (room.hostId !== socket.id) throw new Error("只有房主能开始");
-        startRound(room);
+        startRound(room, { exposeDurationMs });
+        scheduleExposeFinish(room);
         persistRooms();
         emitRoom(room);
         callback({ ok: true });
@@ -304,14 +336,7 @@ function createGameServer(options = {}) {
       try {
         const room = getRoomForSocket(socket);
         if (!room) throw new Error("请先进入房间");
-        const player = assertPlayer(socket, room);
-        if (room.hostId !== socket.id && player.seat !== room.round?.starter) {
-          throw new Error("房主或首出玩家可以结束卖牌");
-        }
-        finishExpose(room);
-        persistRooms();
-        emitRoom(room);
-        callback({ ok: true });
+        throw new Error("卖牌会在倒计时结束后自动开始出牌");
       } catch (error) {
         callback({ ok: false, error: error.message });
       }
@@ -337,7 +362,8 @@ function createGameServer(options = {}) {
         const room = getRoomForSocket(socket);
         if (!room) throw new Error("请先进入房间");
         if (room.hostId !== socket.id) throw new Error("只有房主能开新局");
-        startRound(room);
+        startRound(room, { exposeDurationMs });
+        scheduleExposeFinish(room);
         persistRooms();
         emitRoom(room);
         callback({ ok: true });
@@ -372,39 +398,28 @@ function createGameServer(options = {}) {
       }
     });
 
-    socket.on("voiceSignal", ({ targetId, signal } = {}, callback = () => {}) => {
+    socket.on("playerReaction", ({ targetSeat, kind } = {}, callback = () => {}) => {
       try {
         const room = getRoomForSocket(socket);
         if (!room) throw new Error("请先进入房间");
-        const targetInRoom = room.players.some((player) => player.socketId === targetId)
-          || room.spectators.some((spectator) => spectator.socketId === targetId);
-        if (!targetInRoom) throw new Error("语音目标不在房间");
-        io.to(targetId).emit("voiceSignal", {
-          fromId: socket.id,
-          signal
-        });
+        const sender = room.players.find((candidate) => candidate.socketId === socket.id)
+          || room.spectators.find((candidate) => candidate.socketId === socket.id);
+        if (!sender) throw new Error("你不在这个房间");
+        const seat = Number.parseInt(targetSeat, 10);
+        if (!Number.isInteger(seat) || seat < 0 || seat >= room.players.length) throw new Error("目标玩家不存在");
+        if (!["egg", "flower"].includes(kind)) throw new Error("未知互动");
+        const reaction = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          kind,
+          targetSeat: seat,
+          fromName: sender.name,
+          at: Date.now()
+        };
+        io.to(room.code).emit("playerReaction", reaction);
         callback({ ok: true });
       } catch (error) {
         callback({ ok: false, error: error.message });
       }
-    });
-
-    socket.on("voiceState", ({ speakerEnabled, micEnabled } = {}) => {
-      const room = getRoomForSocket(socket);
-      if (!room) return;
-      const participant = room.players.find((player) => player.socketId === socket.id)
-        || room.spectators.find((spectator) => spectator.socketId === socket.id);
-      if (participant) {
-        if (speakerEnabled !== undefined) participant.voiceSpeakerEnabled = Boolean(speakerEnabled);
-        if (micEnabled !== undefined) participant.voiceMicEnabled = Boolean(micEnabled);
-      }
-      io.to(room.code).emit("voiceState", {
-        socketId: socket.id,
-        speakerEnabled: Boolean(participant?.voiceSpeakerEnabled),
-        micEnabled: Boolean(participant?.voiceMicEnabled)
-      });
-      persistRooms();
-      emitRoom(room);
     });
 
     socket.on("disconnect", () => {
@@ -575,9 +590,7 @@ function participantToSnapshot(participant) {
     pigCount: participant.pigCount || 0,
     joinedAt: participant.joinedAt,
     connected: false,
-    socketId: null,
-    voiceSpeakerEnabled: false,
-    voiceMicEnabled: false
+    socketId: null
   };
 }
 
@@ -621,8 +634,6 @@ function roomFromSnapshot(snapshot) {
     direction: DIRECTIONS[index],
     directionLabel: DIRECTION_LABELS[index],
     pigCount: Number.isFinite(player.pigCount) ? player.pigCount : 0,
-    voiceSpeakerEnabled: false,
-    voiceMicEnabled: false,
     connected: false
   }));
   if (players.length === 0) return null;
@@ -646,8 +657,6 @@ function roomFromSnapshot(snapshot) {
         clientId: normalizeClientId(spectator.clientId, `restored-spectator-${snapshot.code}-${index}`),
         name: String(spectator.name || "旁观者").trim().slice(0, 16) || "旁观者",
         role: "spectator",
-        voiceSpeakerEnabled: false,
-        voiceMicEnabled: false,
         joinedAt: spectator.joinedAt || Date.now()
       }))
       : [],
@@ -697,6 +706,7 @@ function roundFromSnapshot(snapshot) {
     pendingTrickResolution: snapshot.pendingTrickResolution?.resolveAt
       ? { resolveAt: snapshot.pendingTrickResolution.resolveAt }
       : null,
+    exposeEndsAt: snapshot.exposeEndsAt || null,
     trickNumber: snapshot.trickNumber || 1,
     lastTrick: snapshot.lastTrick ? {
       winner: snapshot.lastTrick.winner,
@@ -807,8 +817,6 @@ function reconnectParticipant(room, participant, socketId, name, socketRooms) {
   participant.socketId = socketId;
   participant.name = cleanName;
   participant.connected = true;
-  participant.voiceSpeakerEnabled = false;
-  participant.voiceMicEnabled = false;
   socketRooms?.set(socketId, room.code);
   if (room.hostClientId && participant.clientId === room.hostClientId) {
     room.hostId = socketId;
@@ -844,8 +852,6 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = so
       clientId: cleanClientId,
       name: cleanName,
       role: "spectator",
-      voiceSpeakerEnabled: false,
-      voiceMicEnabled: false,
       joinedAt: Date.now()
     };
     room.spectators.push(spectator);
@@ -861,8 +867,6 @@ function addPlayerToRoom(room, socketId, name, socketRooms = null, clientId = so
     direction: DIRECTIONS[room.players.length],
     directionLabel: DIRECTION_LABELS[room.players.length],
     pigCount: 0,
-    voiceSpeakerEnabled: false,
-    voiceMicEnabled: false,
     connected: true
   };
   room.players.push(player);
@@ -883,8 +887,6 @@ function publicRoom(room) {
       direction: player.direction,
       directionLabel: player.directionLabel,
       connected: player.connected,
-      voiceSpeakerEnabled: player.voiceSpeakerEnabled,
-      voiceMicEnabled: player.voiceMicEnabled,
       pigCount: player.pigCount || 0,
       handCount: room.round?.hands[player.seat]?.length ?? 0,
       scoreCards: room.round ? scoringCardsFor(room.round.taken[player.seat] || []) : []
@@ -895,7 +897,7 @@ function publicRoom(room) {
     })),
     round: room.round ? publicRound(room.round) : null,
     chats: room.chats.slice(-80),
-    messages: room.messages.slice(-24)
+    messages: publicMessagesFor(room)
   };
 }
 
@@ -913,6 +915,8 @@ function publicRound(round) {
       exposed: play.exposed
     })),
     settlingTrick: Boolean(round.pendingTrickResolution),
+    exposeEndsAt: round.exposeEndsAt || null,
+    serverNow: Date.now(),
     heartsSeen: Boolean(round.heartsSeen),
     exposed: round.exposed,
     protectedSuits: round.protectedSuits,
@@ -962,9 +966,37 @@ function pushMessage(room, text) {
   room.messages = room.messages.slice(-50);
 }
 
-function startRound(room) {
+function pushRoundMessage(room, text, roundId = room.round?.handNumber) {
+  const message = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    text,
+    at: Date.now(),
+    type: "round",
+    roundId
+  };
+  room.messages.push(message);
+  room.messages = room.messages.slice(-50);
+  return message;
+}
+
+function publicMessagesFor(room) {
+  const round = room.round;
+  if (!round) return room.messages.slice(-4);
+  if (round.phase === "lobby") return room.messages.slice(-4);
+  const roundMessages = room.messages.filter((message) => message.type === "round" && message.roundId === round.handNumber);
+  if (round.phase === "play") {
+    return roundMessages.filter((message) => message.trickNumber === round.trickNumber).slice(-4);
+  }
+  return roundMessages.slice(-6);
+}
+
+function startRound(room, options = {}) {
   if (room.players.length !== 4) {
     throw new Error("需要 4 位玩家才能开始");
+  }
+  if (room.exposeTimer) {
+    clearTimeout(room.exposeTimer);
+    room.exposeTimer = null;
   }
   room.players.forEach((player) => {
     if (!Number.isFinite(player.pigCount)) player.pigCount = 0;
@@ -1002,13 +1034,14 @@ function startRound(room) {
     trickLeadSuit: null,
     trick: [],
     pendingTrickResolution: null,
+    exposeEndsAt: Date.now() + Math.max(0, Number(options.exposeDurationMs ?? DEFAULT_EXPOSE_DURATION_MS)),
     trickNumber: 1,
     lastTrick: null,
     heartsSeen: false,
     scorePreview: [0, 0, 0, 0],
     finishedScores: null
   };
-  pushMessage(room, `第 ${room.round.handNumber} 局开始，${room.players[starter].name} 持黑桃 2 先出。`);
+  pushRoundMessage(room, `第 ${room.round.handNumber} 局开始，${room.players[starter].name} 持黑桃 2 先出。`, room.round.handNumber);
 }
 
 function getExposableCardIds(round, seat) {
@@ -1030,15 +1063,20 @@ function exposeCards(room, seat, cardIds) {
     round.protectedSuits[id[0]] = true;
   }
   if (uniqueIds.length > 0) {
-    pushMessage(room, `${room.players[seat].name} 卖出 ${uniqueIds.map(formatCardId).join("、")}。`);
+    pushRoundMessage(room, `${room.players[seat].name} 卖出 ${uniqueIds.map(formatCardId).join("、")}。`);
   }
 }
 
 function finishExpose(room) {
   const round = room.round;
   if (!round || round.phase !== "expose") throw new Error("现在不能开始出牌");
+  if (room.exposeTimer) {
+    clearTimeout(room.exposeTimer);
+    room.exposeTimer = null;
+  }
   round.phase = "play";
-  pushMessage(room, "卖牌结束，开始出牌。");
+  round.exposeEndsAt = null;
+  pushRoundMessage(room, "卖牌结束，开始出牌。");
 }
 
 function getLegalCardIds(round, seat) {
@@ -1097,7 +1135,7 @@ function playCard(room, seat, cardId, options = {}) {
   if (!round.trickLeadSuit) round.trickLeadSuit = card.suit;
   round.trick.push({ seat, card, exposed });
   if (card.suit === "H") round.heartsSeen = true;
-  pushMessage(room, `${room.players[seat].name} 出了 ${formatCard(card)}。`);
+  pushRoundMessage(room, `${room.players[seat].name} 出了 ${formatCard(card)}。`, round.handNumber).trickNumber = round.trickNumber;
 
   if (round.trick.length === 4) {
     const settleDelayMs = Math.max(0, Number(options.settleDelayMs || 0));
@@ -1133,7 +1171,8 @@ function finishTrick(room) {
     winnerName: room.players[winnerPlay.seat].name,
     cards: round.trick
   };
-  pushMessage(room, `${room.players[winnerPlay.seat].name} 收下第 ${round.trickNumber} 墩。`);
+  const finishedTrickNumber = round.trickNumber;
+  pushRoundMessage(room, `${room.players[winnerPlay.seat].name} 收下第 ${finishedTrickNumber} 墩。`).trickNumber = finishedTrickNumber;
 
   round.pendingTrickResolution = null;
   round.currentPlayer = winnerPlay.seat;
@@ -1160,7 +1199,7 @@ function finishRound(room) {
     room.players[seat].pigCount = (room.players[seat].pigCount || 0) + 1;
   }
   const pigNames = pigSeats.map((seat) => room.players[seat]?.name).filter(Boolean).join("、") || "无";
-  pushMessage(room, `本局结束：${scores.map((score, seat) => `${room.players[seat].name} ${formatScore(score)}`).join("，")}。本局当猪：${pigNames}。`);
+  pushRoundMessage(room, `本局结束：${scores.map((score, seat) => `${room.players[seat].name} ${formatScore(score)}`).join("，")}。本局当猪：${pigNames}。`);
 }
 
 function getRoundPigSeats(round, scores = calculateScores(round)) {

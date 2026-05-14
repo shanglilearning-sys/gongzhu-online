@@ -25,13 +25,11 @@ const entryError = document.querySelector("#entry-error");
 const roomCode = document.querySelector("#room-code");
 const phaseTitle = document.querySelector("#phase-title");
 const startButton = document.querySelector("#start-button");
-const finishExposeButton = document.querySelector("#finish-expose-button");
 const newRoundButton = document.querySelector("#new-round-button");
 const copyLinkButton = document.querySelector("#copy-link");
 const historyButton = document.querySelector("#history-button");
 const rulesButton = document.querySelector("#rules-button");
-const speakerButton = document.querySelector("#speaker-button");
-const micButton = document.querySelector("#mic-button");
+const tableModeButton = document.querySelector("#table-mode-button");
 const uiScaleInput = document.querySelector("#ui-scale");
 const uiScaleValue = document.querySelector("#ui-scale-value");
 const scoreStrip = document.querySelector("#score-strip");
@@ -52,16 +50,10 @@ const modalClose = document.querySelector("#modal-close");
 const chatList = document.querySelector("#chat-list");
 const chatForm = document.querySelector("#chat-form");
 const chatInput = document.querySelector("#chat-input");
-const voiceStatus = document.querySelector("#voice-status");
 
-let localVoiceStream = null;
-let speakerEnabled = false;
-let micEnabled = false;
 let resumeInFlight = false;
-const peerConnections = new Map();
-const remoteAudio = new Map();
-const remoteVoiceStates = new Map();
-const pendingIceCandidates = new Map();
+let tableModeEnabled = false;
+let serverTimeOffset = 0;
 
 const params = new URLSearchParams(window.location.search);
 if (params.get("room")) {
@@ -88,10 +80,6 @@ joinForm.addEventListener("submit", (event) => {
 
 startButton.addEventListener("click", () => {
   emitAction("startGame", {});
-});
-
-finishExposeButton.addEventListener("click", () => {
-  emitAction("finishExpose", {});
 });
 
 newRoundButton.addEventListener("click", () => {
@@ -127,6 +115,13 @@ rulesButton.addEventListener("click", () => {
   openRules();
 });
 
+tableModeButton.addEventListener("click", toggleTableMode);
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement && tableModeEnabled) {
+    setTableMode(false);
+  }
+});
+
 modalClose.addEventListener("click", closeModal);
 modal.addEventListener("click", (event) => {
   if (event.target === modal) closeModal();
@@ -145,16 +140,6 @@ chatForm.addEventListener("submit", (event) => {
   });
 });
 
-speakerButton.addEventListener("click", () => {
-  if (speakerEnabled) stopSpeaker();
-  else startSpeaker();
-});
-
-micButton.addEventListener("click", () => {
-  if (micEnabled) stopMic();
-  else startMic();
-});
-
 uiScaleInput?.addEventListener("input", () => {
   const value = clampScale(uiScaleInput.value);
   localStorage.setItem(UI_SCALE_KEY, String(value));
@@ -163,11 +148,11 @@ uiScaleInput?.addEventListener("input", () => {
 
 socket.on("state", (nextState) => {
   state = nextState;
+  serverTimeOffset = (nextState.round?.serverNow || Date.now()) - Date.now();
   localStorage.setItem("gongzhuLastRoom", nextState.code);
   entry.classList.add("hidden");
   game.classList.remove("hidden");
   render();
-  syncVoicePeers();
 });
 
 socket.on("connect", () => {
@@ -187,19 +172,15 @@ socket.on("chatMessage", (chat) => {
   renderChat();
 });
 
-socket.on("voiceSignal", async ({ fromId, signal }) => {
-  console.log("[voice] received voiceSignal from", fromId, "type:", signal?.type);
-  await handleVoiceSignal(fromId, signal);
+socket.on("playerReaction", (reaction) => {
+  showReaction(reaction);
 });
 
-socket.on("voiceState", ({ socketId, enabled, speakerEnabled: remoteSpeakerEnabled, micEnabled: remoteMicEnabled }) => {
-  remoteVoiceStates.set(socketId, {
-    speakerEnabled: remoteSpeakerEnabled ?? Boolean(enabled),
-    micEnabled: remoteMicEnabled ?? Boolean(enabled)
-  });
-  syncVoicePeers();
-  updateVoiceStatus();
-});
+setInterval(() => {
+  if (state?.round?.phase !== "expose") return;
+  renderTopbar();
+  renderTrick();
+}, 250);
 
 function getName() {
   const name = nameInput.value.trim() || "玩家";
@@ -279,7 +260,6 @@ function render() {
   renderHand();
   renderSidePanel();
   renderChat();
-  updateVoiceStatus();
 }
 
 function renderTopbar() {
@@ -290,7 +270,7 @@ function renderTopbar() {
   if (state.phase === "lobby") {
     phaseTitle.textContent = `等待玩家 ${playerCount}/4`;
   } else if (phase === "expose") {
-    phaseTitle.textContent = "卖牌阶段";
+    phaseTitle.textContent = `卖牌阶段 · ${exposeCountdownSeconds()} 秒后开打`;
   } else if (phase === "play") {
     phaseTitle.textContent = current ? `轮到 ${current.name} 出牌` : "出牌中";
   } else if (phase === "finished") {
@@ -300,9 +280,6 @@ function renderTopbar() {
   const isHost = state.hostId === socket.id;
   startButton.classList.toggle("hidden", state.phase !== "lobby");
   startButton.disabled = !isHost || playerCount !== 4;
-  finishExposeButton.classList.toggle("hidden", phase !== "expose");
-  const canFinishExpose = isHost || state.me?.seat === state.round?.starter;
-  finishExposeButton.disabled = !canFinishExpose;
   newRoundButton.classList.toggle("hidden", phase !== "finished");
   newRoundButton.disabled = !isHost;
 }
@@ -329,7 +306,7 @@ function renderScores() {
         ${pigMarks}
         <strong>${formatScore(currentScore)}</strong>
       </div>
-      <div class="meta">${player ? `本轮 ${formatScore(currentScore)} · 当猪 ${player.pigCount || 0} 局 · 手牌 ${player.handCount || 0}` : "等待加入"}</div>
+      <div class="meta">${player ? `当前分数 ${formatScore(currentScore)}` : "等待加入"}</div>
     `;
     scoreStrip.appendChild(card);
   }
@@ -362,11 +339,22 @@ function renderSlots() {
       <div class="slot-top">
         <span class="slot-seat">${player?.directionLabel || seat + 1}</span>
         <span class="slot-name">${escapeHtml(player?.name || "空位")}</span>
-        ${renderPigMarks(player?.pigCount || 0)}
       </div>
-      <div class="slot-meta">${player ? `${formatScore(currentScore)} · 猪 ${player.pigCount || 0} · 手牌 ${player.handCount}` : "等待加入"}</div>
+      <div class="slot-meta">${player ? `当前分数 ${formatScore(currentScore)}` : "等待加入"}</div>
+      ${player ? `
+        <div class="slot-actions" aria-label="玩家互动">
+          <button type="button" class="reaction-button" data-reaction="egg" title="投鸡蛋">鸡蛋</button>
+          <button type="button" class="reaction-button" data-reaction="flower" title="送花">送花</button>
+        </div>
+      ` : ""}
       ${player?.connected === false ? `<div class="slot-alert">断线</div>` : ""}
     `;
+    slot.querySelectorAll("[data-reaction]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        sendReaction(seat, button.dataset.reaction);
+      });
+    });
   });
 }
 
@@ -404,7 +392,7 @@ function renderTrick() {
   } else if (phase === "play" && state.me?.seat === state.round?.currentPlayer) {
     statusLine.textContent = "轮到你出牌";
   } else if (phase === "expose") {
-    statusLine.textContent = "可选择手里的猪、羊、变压器或红桃 A 卖牌";
+    statusLine.innerHTML = `<span class="countdown-pill">卖牌倒计时 <strong>${exposeCountdownSeconds()}</strong> 秒</span>`;
   } else if (phase === "finished") {
     statusLine.textContent = "房主可以开始下一局";
   } else {
@@ -424,10 +412,10 @@ function renderTrick() {
 
 function renderHand() {
   handEl.innerHTML = "";
-  const hand = [...(state.hand || [])].sort(compareCards);
   const legal = new Set(state.legalPlays || []);
   const exposable = new Set(state.canExpose || []);
   const phase = state.round?.phase;
+  const hand = sortHandForUse(state.hand || [], legal, exposable, phase);
   handTitle.textContent = state.me ? `${state.me.directionLabel}家 · ${hand.length} 张` : "旁观中";
 
   exposeButton.classList.toggle("hidden", phase !== "expose" || exposable.size === 0);
@@ -607,6 +595,27 @@ function currentRoundScore(seat) {
   return state?.round?.scorePreview?.[seat] ?? state?.round?.finishedScores?.[seat] ?? 0;
 }
 
+function exposeCountdownSeconds() {
+  const endsAt = Number(state?.round?.exposeEndsAt || 0);
+  if (!endsAt) return 0;
+  const now = Date.now() + serverTimeOffset;
+  return Math.max(0, Math.ceil((endsAt - now) / 1000));
+}
+
+function sortHandForUse(hand, legal, exposable, phase) {
+  return [...hand].sort((a, b) => {
+    const aPriority = cardUsePriority(a, legal, exposable, phase);
+    const bPriority = cardUsePriority(b, legal, exposable, phase);
+    return aPriority - bPriority || compareCards(a, b);
+  });
+}
+
+function cardUsePriority(card, legal, exposable, phase) {
+  if (phase === "play" && legal.has(card.id)) return 0;
+  if (phase === "expose" && exposable.has(card.id)) return 0;
+  return 1;
+}
+
 function roundSummary() {
   const scores = state?.round?.finishedScores;
   if (!scores) return "查看历史";
@@ -618,6 +627,54 @@ function roundSummary() {
     ? ` · 本局猪 ${pigSeats.map((seat) => state.players[seat]?.name || seat + 1).join("、")}`
     : "";
   return `${scoreText}${pigText}`;
+}
+
+async function toggleTableMode() {
+  if (tableModeEnabled) {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {});
+    }
+    setTableMode(false);
+    return;
+  }
+
+  setTableMode(true);
+  const target = game || document.documentElement;
+  await target.requestFullscreen?.().catch(() => {});
+  if (screen.orientation?.lock) {
+    await screen.orientation.lock("landscape").catch(() => {});
+  }
+}
+
+function setTableMode(enabled) {
+  tableModeEnabled = enabled;
+  game.classList.toggle("table-mode", enabled);
+  document.body.classList.toggle("table-mode-active", enabled);
+  tableModeButton.textContent = enabled ? "退出桌面" : "全屏桌面";
+  if (!enabled) {
+    try {
+      screen.orientation?.unlock?.();
+    } catch {}
+  }
+}
+
+function sendReaction(targetSeat, kind) {
+  socket.emit("playerReaction", { targetSeat, kind }, (response) => {
+    if (!response?.ok) {
+      statusLine.textContent = response?.error || "互动失败";
+    }
+  });
+}
+
+function showReaction(reaction) {
+  const slot = document.querySelector(`.player-slot[data-seat="${reaction?.targetSeat}"]`);
+  if (!slot || !reaction?.kind) return;
+  const item = document.createElement("div");
+  item.className = `reaction-burst ${reaction.kind === "flower" ? "flower" : "egg"}`;
+  item.textContent = reaction.kind === "flower" ? "花" : "蛋";
+  item.title = `${reaction.fromName || "玩家"} ${reaction.kind === "flower" ? "送花" : "投鸡蛋"}`;
+  slot.appendChild(item);
+  setTimeout(() => item.remove(), 1100);
 }
 
 function openScoreCards(seat) {
@@ -678,313 +735,17 @@ function openRules() {
   modalTitle.textContent = "规则速查";
   modalBody.innerHTML = `
     <div class="rules-grid">
-      <div><strong>卖牌</strong><span>开局可卖猪、羊、变压器、红桃 A。卖过的牌分值翻倍或变压器翻四倍。</span></div>
+      <div><strong>卖牌</strong><span>开局 8 秒内可卖猪、羊、变压器、红桃 A，倒计时结束后自动开打。</span></div>
       <div><strong>首出</strong><span>持黑桃 2 的玩家首出，第一墩必须先出黑桃 2。</span></div>
       <div><strong>跟牌</strong><span>必须跟首出花色，没有该花色时可以垫任意牌。</span></div>
       <div><strong>分牌</strong><span>黑桃 Q -100，羊 +100，红桃 5-A 为负分，变压器单收 +50。</span></div>
       <div><strong>全红</strong><span>收齐全部红桃转为 +200；红桃 A 被卖后为 +400。</span></div>
       <div><strong>当猪</strong><span>每局最终分数最低者当猪；并列最低一起当猪；有人收全红时，其余三人当猪。</span></div>
-      <div><strong>聊天语音</strong><span>先开听筒才能听别人，开麦克风才会把自己的声音发出去。手机端首次开启听筒用于解锁播放。</span></div>
+      <div><strong>互动</strong><span>点击玩家窗口里的鸡蛋或送花按钮，可以给朋友一点牌桌气氛。</span></div>
       <div><strong>嘉铭赞助</strong><span>本桌由嘉铭冠名赞助，输赢各凭牌技。</span></div>
     </div>
   `;
   openModal();
-}
-
-async function startSpeaker() {
-  speakerEnabled = true;
-  speakerButton.textContent = "关闭听筒";
-  speakerButton.classList.add("voice-on");
-  unlockRemoteAudio();
-  socket.emit("voiceState", { speakerEnabled: true });
-  await syncVoicePeers();
-  updateVoiceStatus();
-}
-
-function stopSpeaker() {
-  speakerEnabled = false;
-  speakerButton.textContent = "开启听筒";
-  speakerButton.classList.remove("voice-on");
-  socket.emit("voiceState", { speakerEnabled: false });
-  closeReceiveOnlyConnections();
-  for (const audio of remoteAudio.values()) {
-    audio.pause();
-    audio.srcObject = null;
-  }
-  updateVoiceStatus();
-}
-
-async function startMic() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    statusLine.textContent = "当前浏览器不支持麦克风";
-    return;
-  }
-  try {
-    localVoiceStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      },
-      video: false
-    });
-    for (const track of localVoiceStream.getAudioTracks()) track.enabled = true;
-    console.log("[voice] got local stream, tracks:", localVoiceStream.getAudioTracks().length);
-    micEnabled = true;
-    micButton.textContent = "关闭麦克风";
-    micButton.classList.add("voice-on");
-    socket.emit("voiceState", { micEnabled: true });
-    await syncVoicePeers();
-    updateVoiceStatus();
-  } catch (e) {
-    console.error("[voice] getUserMedia failed:", e);
-    statusLine.textContent = "无法开启麦克风，请检查浏览器权限";
-  }
-}
-
-function stopMic() {
-  micEnabled = false;
-  micButton.textContent = "开启麦克风";
-  micButton.classList.remove("voice-on");
-  socket.emit("voiceState", { micEnabled: false });
-  if (localVoiceStream) {
-    for (const track of localVoiceStream.getTracks()) track.stop();
-  }
-  localVoiceStream = null;
-  closeSendOnlyConnections();
-  syncVoicePeers();
-  updateVoiceStatus();
-}
-
-async function syncVoicePeers() {
-  if (!state?.players?.length) return;
-  const peers = state.players.filter((player) => player.socketId && player.socketId !== socket.id && player.connected !== false);
-  const desiredPeerIds = new Set();
-  for (const player of peers) {
-    const peerState = getVoiceStateForPlayer(player);
-    const shouldConnect = (speakerEnabled && peerState.micEnabled) || (micEnabled && peerState.speakerEnabled);
-    if (shouldConnect) {
-      desiredPeerIds.add(player.socketId);
-      if (!peerConnections.has(player.socketId)) {
-        const initiator = micEnabled && peerState.speakerEnabled;
-        console.log("[voice] creating desired connection to", player.socketId, "initiator:", initiator);
-        await createPeerConnection(player.socketId, initiator);
-      } else {
-        ensureLocalTracks(peerConnections.get(player.socketId));
-      }
-    }
-  }
-
-  for (const peerId of [...peerConnections.keys()]) {
-    if (!desiredPeerIds.has(peerId)) closePeerConnection(peerId);
-  }
-}
-
-async function handleVoiceSignal(fromId, signal) {
-  if (!signal) return;
-  console.log("[voice] signal from", fromId, "type:", signal.type);
-  const fromPlayer = state?.players?.find((player) => player.socketId === fromId);
-  const fromState = fromPlayer ? getVoiceStateForPlayer(fromPlayer) : remoteVoiceStates.get(fromId);
-  const shouldAccept = signal.type === "candidate"
-    || (speakerEnabled && fromState?.micEnabled)
-    || (micEnabled && fromState?.speakerEnabled);
-  if (!shouldAccept) {
-    console.log("[voice] ignored signal; no matching speaker/mic state");
-    return;
-  }
-
-  try {
-    if (signal.type === "offer") {
-      const existing = peerConnections.get(fromId);
-      if (existing && existing.signalingState !== "stable") {
-        closePeerConnection(fromId);
-      }
-      const connection = await createPeerConnection(fromId, false);
-      await connection.setRemoteDescription(signal.description);
-      await flushPendingIce(fromId, connection);
-      const answer = await connection.createAnswer();
-      await connection.setLocalDescription(answer);
-      console.log("[voice] sending answer to", fromId);
-      sendVoiceSignal(fromId, { type: "answer", description: connection.localDescription });
-    } else if (signal.type === "answer") {
-      const connection = peerConnections.get(fromId);
-      if (!connection) return;
-      await connection.setRemoteDescription(signal.description);
-      await flushPendingIce(fromId, connection);
-      console.log("[voice] set remote answer from", fromId);
-    } else if (signal.type === "candidate" && signal.candidate) {
-      const connection = peerConnections.get(fromId);
-      if (connection?.remoteDescription) {
-        await connection.addIceCandidate(signal.candidate);
-      } else {
-        queuePendingIce(fromId, signal.candidate);
-      }
-    }
-  } catch (e) {
-    console.error("[voice] signal error:", e);
-  }
-}
-
-async function createPeerConnection(peerId, initiator) {
-  const existing = peerConnections.get(peerId);
-  if (existing) {
-    ensureLocalTracks(existing);
-    return existing;
-  }
-  const connection = new RTCPeerConnection({
-    iceServers: [
-      { urls: "stun:stun.miwifi.com:3478" },
-      { urls: "stun:stun.chat.bilibili.com:3478" },
-      { urls: "stun:stun.hitv.com:3478" },
-      { urls: "stun:stun.cdnbye.com:3478" },
-      {
-        urls: "turn:openrelay.metered.ca:80",
-        username: "openrelayproject",
-        credential: "openrelayproject"
-      },
-      {
-        urls: "turn:openrelay.metered.ca:443",
-        username: "openrelayproject",
-        credential: "openrelayproject"
-      }
-    ]
-  });
-  connection._initiator = initiator;
-  peerConnections.set(peerId, connection);
-  console.log("[voice] created", initiator ? "initiator" : "answerer", "connection to", peerId);
-
-  ensureLocalTracks(connection);
-
-  connection.onicecandidate = (event) => {
-    if (event.candidate) {
-      sendVoiceSignal(peerId, { type: "candidate", candidate: event.candidate });
-    }
-  };
-
-  connection.ontrack = (event) => {
-    console.log("[voice] ontrack from", peerId, "streams:", event.streams.length, "tracks:", event.streams[0]?.getAudioTracks().length);
-    let audio = remoteAudio.get(peerId);
-    if (!audio) {
-      audio = document.createElement("audio");
-      audio.autoplay = true;
-      audio.playsInline = true;
-      audio.volume = 1.0;
-      document.body.appendChild(audio);
-      remoteAudio.set(peerId, audio);
-      console.log("[voice] created audio element for", peerId);
-    }
-    audio.srcObject = event.streams[0];
-    if (speakerEnabled) {
-      audio.play().catch((e) => {
-        console.error("[voice] audio play failed:", e);
-        statusLine.textContent = "听筒被浏览器拦截，请再点一次开启听筒";
-      });
-    }
-  };
-
-  connection.onconnectionstatechange = () => {
-    console.log("[voice] connection state to", peerId, ":", connection.connectionState);
-    if (["closed", "failed", "disconnected"].includes(connection.connectionState)) {
-      peerConnections.delete(peerId);
-      updateVoiceStatus();
-      if (connection.connectionState === "failed") setTimeout(syncVoicePeers, 800);
-    }
-  };
-
-  if (initiator) {
-    const offer = await connection.createOffer();
-    await connection.setLocalDescription(offer);
-    sendVoiceSignal(peerId, { type: "offer", description: connection.localDescription });
-  }
-
-  return connection;
-}
-
-function sendVoiceSignal(targetId, signal) {
-  socket.emit("voiceSignal", { targetId, signal }, (response) => {
-    if (!response?.ok) {
-      statusLine.textContent = response?.error || "语音连接失败";
-    }
-  });
-}
-
-function ensureLocalTracks(connection) {
-  const currentTracks = new Set(connection.getSenders().map((sender) => sender.track).filter(Boolean));
-  if (!micEnabled || !localVoiceStream) return;
-  for (const track of localVoiceStream.getAudioTracks()) {
-    if (!currentTracks.has(track)) connection.addTrack(track, localVoiceStream);
-  }
-}
-
-function closePeerConnection(peerId) {
-  const connection = peerConnections.get(peerId);
-  if (connection) connection.close();
-  peerConnections.delete(peerId);
-  pendingIceCandidates.delete(peerId);
-  const audio = remoteAudio.get(peerId);
-  if (audio) {
-    audio.pause();
-    audio.srcObject = null;
-    audio.remove();
-  }
-  remoteAudio.delete(peerId);
-}
-
-function closeReceiveOnlyConnections() {
-  for (const player of state?.players || []) {
-    if (player.socketId && getVoiceStateForPlayer(player).micEnabled && !micEnabled) {
-      closePeerConnection(player.socketId);
-    }
-  }
-}
-
-function closeSendOnlyConnections() {
-  for (const player of state?.players || []) {
-    if (player.socketId && getVoiceStateForPlayer(player).speakerEnabled && !speakerEnabled) {
-      closePeerConnection(player.socketId);
-    }
-  }
-}
-
-function queuePendingIce(peerId, candidate) {
-  if (!pendingIceCandidates.has(peerId)) pendingIceCandidates.set(peerId, []);
-  pendingIceCandidates.get(peerId).push(candidate);
-}
-
-async function flushPendingIce(peerId, connection) {
-  const candidates = pendingIceCandidates.get(peerId) || [];
-  pendingIceCandidates.delete(peerId);
-  for (const candidate of candidates) {
-    await connection.addIceCandidate(candidate);
-  }
-}
-
-function unlockRemoteAudio() {
-  for (const audio of remoteAudio.values()) {
-    audio.muted = false;
-    audio.play().catch(() => {});
-  }
-}
-
-function getVoiceStateForPlayer(player) {
-  if (!player) return { speakerEnabled: false, micEnabled: false };
-  if (player.socketId === socket.id) return { speakerEnabled, micEnabled };
-  const runtimeState = remoteVoiceStates.get(player.socketId);
-  return {
-    speakerEnabled: runtimeState?.speakerEnabled ?? Boolean(player.voiceSpeakerEnabled),
-    micEnabled: runtimeState?.micEnabled ?? Boolean(player.voiceMicEnabled)
-  };
-}
-
-function updateVoiceStatus() {
-  const micNames = (state?.players || [])
-    .filter((player) => getVoiceStateForPlayer(player).micEnabled)
-    .map((player) => player.name);
-  const parts = [
-    speakerEnabled ? "听筒开" : "听筒关",
-    micEnabled ? "麦克风开" : "麦克风关"
-  ];
-  voiceStatus.textContent = `${parts.join(" · ")}${micNames.length ? ` · 正在说话：${micNames.join("、")}` : ""}`;
 }
 
 function openModal() {

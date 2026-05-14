@@ -96,6 +96,7 @@ async function testProcessRestartRestore() {
   const clientIds = ["persist-a", "persist-b", "persist-c", "persist-d"];
   let serverOne = createGameServer({
     trickSettleDelayMs: 80,
+    exposeDurationMs: 5000,
     saveDebounceMs: 0,
     persistence: createRoomPersistence({ filePath })
   });
@@ -124,6 +125,7 @@ async function testProcessRestartRestore() {
 
   const serverTwo = createGameServer({
     trickSettleDelayMs: 80,
+    exposeDurationMs: 5000,
     saveDebounceMs: 0,
     persistence: createRoomPersistence({ filePath })
   });
@@ -155,7 +157,7 @@ async function testProcessRestartRestore() {
 }
 
 async function testFullGameFlow() {
-  const { server, io, ready } = createGameServer({ trickSettleDelayMs: 80 });
+  const { server, io, ready } = createGameServer({ trickSettleDelayMs: 80, exposeDurationMs: 80 });
   await ready;
   const port = await listen(server);
   const url = `http://127.0.0.1:${port}`;
@@ -213,11 +215,20 @@ async function testFullGameFlow() {
       await client.emit("exposeCards", { cardIds: client.state.canExpose });
     }
 
-    await clients[0].emit("finishExpose");
     await Promise.all(clients.map((client) => client.waitFor(
       (state) => state.round?.phase === "play",
       "play phase"
     )));
+
+    const reactionSeen = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timed out waiting for player reaction")), 1000);
+      clients[1].socket.once("playerReaction", (reaction) => {
+        clearTimeout(timer);
+        resolve(reaction);
+      });
+    });
+    await clients[0].emit("playerReaction", { targetSeat: clients[1].state.me.seat, kind: "flower" });
+    assert.equal((await reactionSeen).kind, "flower");
 
     let sawSettlingTrick = false;
 
