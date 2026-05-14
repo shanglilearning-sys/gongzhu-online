@@ -1434,6 +1434,17 @@ body.table-mode-active {
 }
 
 @media (max-width: 640px) {
+  :root {
+    --card-w: calc(70px * var(--ui-scale));
+    --card-h: calc(100px * var(--ui-scale));
+    --small-card-w: calc(58px * var(--ui-scale));
+    --small-card-h: calc(82px * var(--ui-scale));
+    --slot-w: calc(184px * var(--ui-scale));
+    --slot-pad: max(6px, calc(9px * var(--ui-scale)));
+    --table-inset-y: clamp(62px, calc(108px * var(--ui-scale)), 96px);
+    --table-inset-x: clamp(38px, calc(132px * var(--ui-scale)), 88px);
+  }
+
   body {
     background: linear-gradient(180deg, #12170f 0%, #0d110c 100%);
   }
@@ -1443,27 +1454,27 @@ body.table-mode-active {
   }
 
   .game-screen {
-    min-width: 430px;
-    padding: 8px;
-    gap: 8px;
-    grid-template-rows: auto auto minmax(500px, 62svh) auto auto;
+    min-width: 390px;
+    padding: 10px;
+    gap: 10px;
+    grid-template-rows: auto auto minmax(360px, 48svh) auto auto;
   }
 
   body.page-zoom-active:not(.table-mode-active) .game-screen:not(.hidden) {
-    width: max(430px, 118vw, calc(100vw / var(--page-zoom)));
-    min-width: max(430px, 118vw, calc(100vw / var(--page-zoom)));
+    width: 100vw;
+    min-width: 390px;
   }
 
   .topbar {
-    min-height: 68px;
-    padding: 10px;
+    min-height: 82px;
+    padding: 12px;
     align-items: stretch;
     flex-direction: column;
-    gap: 9px;
+    gap: 11px;
   }
 
   .topbar h2 {
-    font-size: 22px;
+    font-size: 24px;
   }
 
   .topbar-actions {
@@ -1474,17 +1485,17 @@ body.table-mode-active {
 
   .scale-control {
     flex: 0 0 auto;
-    grid-template-columns: auto minmax(76px, 108px) 38px;
-    min-height: 34px;
-    padding: 0 9px;
-    font-size: 12px;
+    grid-template-columns: auto minmax(96px, 132px) 44px;
+    min-height: 40px;
+    padding: 0 11px;
+    font-size: 13px;
   }
 
   .topbar-actions button {
     flex: 0 0 auto;
-    min-height: 34px;
-    padding: 0 12px;
-    font-size: 13px;
+    min-height: 40px;
+    padding: 0 14px;
+    font-size: 14px;
   }
 
   .modal {
@@ -1516,14 +1527,14 @@ body.table-mode-active {
   .score-strip {
     display: grid;
     grid-auto-flow: column;
-    grid-auto-columns: minmax(136px, 42vw);
+    grid-auto-columns: minmax(156px, 48vw);
     grid-template-columns: none;
     overflow-x: auto;
-    padding: 7px;
+    padding: 8px;
   }
 
   .score-card {
-    padding: 8px;
+    padding: 9px;
   }
 
   .score-card .name {
@@ -1544,7 +1555,7 @@ body.table-mode-active {
   }
 
   .table-wrap {
-    min-height: clamp(500px, 62svh, 620px);
+    min-height: clamp(360px, 48svh, 450px);
     border-width: 7px;
   }
 
@@ -1553,14 +1564,17 @@ body.table-mode-active {
   }
 
   .table {
-    inset: clamp(90px, calc(100px * var(--ui-scale)), 116px) clamp(48px, calc(56px * var(--ui-scale)), 64px) clamp(92px, calc(106px * var(--ui-scale)), 122px);
-    grid-template-rows: auto minmax(170px, 1fr) auto;
+    inset:
+      clamp(64px, calc(100px * var(--ui-scale)), 92px)
+      clamp(36px, calc(56px * var(--ui-scale)), 58px)
+      clamp(64px, calc(106px * var(--ui-scale)), 96px);
+    grid-template-rows: auto minmax(132px, 1fr) auto;
     gap: 8px;
   }
 
   .trick-area {
-    width: min(calc(230px * var(--ui-scale)), 62vw);
-    min-height: calc(198px * var(--ui-scale));
+    width: min(calc(280px * var(--ui-scale)), 68vw);
+    min-height: calc(230px * var(--ui-scale));
   }
 
   .status-line {
@@ -1582,9 +1596,9 @@ body.table-mode-active {
   }
 
   .player-slot {
-    width: clamp(124px, calc(134px * var(--ui-scale)), 148px);
-    min-height: calc(74px * var(--ui-scale));
-    padding: calc(7px * var(--ui-scale));
+    width: clamp(104px, calc(176px * var(--ui-scale)), 132px);
+    min-height: clamp(62px, calc(84px * var(--ui-scale)), 78px);
+    padding: max(6px, calc(7px * var(--ui-scale)));
     gap: 3px;
   }
 
@@ -1610,18 +1624,18 @@ body.table-mode-active {
   }
 
   .slot-seat {
-    width: 20px;
-    height: 20px;
+    width: 21px;
+    height: 21px;
     font-size: 11px;
   }
 
   .slot-name {
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .slot-meta,
   .slot-alert {
-    font-size: 11px;
+    font-size: 11.5px;
   }
 
   .slot-actions {
@@ -1629,9 +1643,9 @@ body.table-mode-active {
   }
 
   .reaction-button {
-    min-height: 22px;
-    padding: 0 5px;
-    font-size: 10px;
+    min-height: 23px;
+    padding: 0 6px;
+    font-size: 10.5px;
   }
 
   .game-screen.table-mode .topbar {
@@ -1665,7 +1679,7 @@ body.table-mode-active {
   }
 
   .hand-panel {
-    padding: 10px 10px 12px;
+    padding: 12px 12px 14px;
   }
 
   .hand-heading {
@@ -1673,21 +1687,21 @@ body.table-mode-active {
   }
 
   .hand-heading h3 {
-    font-size: 18px;
+    font-size: 20px;
   }
 
   .hand {
-    gap: 0;
-    min-height: calc(102px * var(--ui-scale));
-    padding: 8px 4px 10px;
+    gap: 2px;
+    min-height: calc(118px * var(--ui-scale));
+    padding: 10px 5px 12px;
   }
 
   .hand .card {
-    flex-basis: clamp(50px, calc(56px * var(--ui-scale)), 63px);
-    width: clamp(50px, calc(56px * var(--ui-scale)), 63px);
-    height: clamp(78px, calc(86px * var(--ui-scale)), 96px);
-    margin-right: -8px;
-    padding: 6px;
+    flex-basis: var(--card-w);
+    width: var(--card-w);
+    height: var(--card-h);
+    margin-right: calc(-6px * var(--ui-scale));
+    padding: max(5px, calc(7px * var(--ui-scale)));
   }
 
   .hand .card:last-child {
@@ -1695,11 +1709,11 @@ body.table-mode-active {
   }
 
   .card .rank {
-    font-size: 17px;
+    font-size: calc(20px * var(--ui-scale));
   }
 
   .card .suit {
-    font-size: 24px;
+    font-size: calc(31px * var(--ui-scale));
   }
 
   .card .label {
@@ -1707,9 +1721,9 @@ body.table-mode-active {
   }
 
   .card.small {
-    flex-basis: clamp(46px, calc(50px * var(--ui-scale)), 56px);
-    width: clamp(46px, calc(50px * var(--ui-scale)), 56px);
-    height: clamp(68px, calc(72px * var(--ui-scale)), 80px);
+    flex-basis: var(--small-card-w);
+    width: var(--small-card-w);
+    height: var(--small-card-h);
   }
 
   .side-panel {

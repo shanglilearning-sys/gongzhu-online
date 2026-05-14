@@ -8,7 +8,8 @@ const SUIT_NAMES = { S: "黑桃", H: "红桃", D: "方块", C: "梅花" };
 const SPECIAL_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
 const CLIENT_ID_KEY = "gongzhuClientId";
-const UI_SCALE_KEY = "gongzhuPageZoomV2";
+const DESKTOP_ZOOM_KEY = "gongzhuPageZoomV2";
+const MOBILE_PLAY_SCALE_KEY = "gongzhuMobilePlayScaleV1";
 const MOBILE_QUERY = window.matchMedia("(max-width: 640px), (pointer: coarse)");
 
 let state = null;
@@ -32,6 +33,7 @@ const historyButton = document.querySelector("#history-button");
 const rulesButton = document.querySelector("#rules-button");
 const tableModeButton = document.querySelector("#table-mode-button");
 const uiScaleInput = document.querySelector("#ui-scale");
+const uiScaleLabel = document.querySelector("#ui-scale-label");
 const uiScaleValue = document.querySelector("#ui-scale-value");
 const scoreStrip = document.querySelector("#score-strip");
 const trickArea = document.querySelector("#trick-area");
@@ -144,7 +146,7 @@ chatForm.addEventListener("submit", (event) => {
 
 uiScaleInput?.addEventListener("input", () => {
   const value = clampScale(uiScaleInput.value);
-  localStorage.setItem(UI_SCALE_KEY, String(value));
+  localStorage.setItem(activeScaleKey(), String(value));
   applyUiScale(value);
   renderSlots();
 });
@@ -160,6 +162,7 @@ screen.orientation?.addEventListener?.("change", () => {
 
 MOBILE_QUERY.addEventListener?.("change", () => {
   updateTableModeAvailability();
+  applyUiScale(getSavedUiScale());
   renderSlots();
 });
 
@@ -220,26 +223,48 @@ function getClientId() {
 }
 
 function getSavedUiScale() {
-  return clampScale(localStorage.getItem(UI_SCALE_KEY) || defaultPageZoom());
+  return clampScale(localStorage.getItem(activeScaleKey()) || defaultPageZoom());
 }
 
 function defaultPageZoom() {
-  return MOBILE_QUERY.matches ? 85 : 100;
+  return MOBILE_QUERY.matches ? 70 : 100;
+}
+
+function activeScaleKey() {
+  return MOBILE_QUERY.matches ? MOBILE_PLAY_SCALE_KEY : DESKTOP_ZOOM_KEY;
+}
+
+function scaleBounds() {
+  return MOBILE_QUERY.matches
+    ? { min: 50, max: 100 }
+    : { min: 65, max: 120 };
 }
 
 function clampScale(value) {
+  const { min, max } = scaleBounds();
   const numeric = Number.parseInt(value, 10);
   if (!Number.isFinite(numeric)) return 100;
-  return Math.min(120, Math.max(65, numeric));
+  return Math.min(max, Math.max(min, numeric));
 }
 
 function applyUiScale(value) {
   const scale = clampScale(value);
-  document.documentElement.style.setProperty("--ui-scale", "1");
-  document.documentElement.style.setProperty("--page-zoom", String(scale / 100));
-  document.body.classList.toggle("page-zoom-active", scale !== 100);
+  const isMobile = MOBILE_QUERY.matches;
+  document.documentElement.style.setProperty("--ui-scale", isMobile ? String(scale / 100) : "1");
+  document.documentElement.style.setProperty("--page-zoom", isMobile ? "1" : String(scale / 100));
+  document.body.classList.toggle("page-zoom-active", !isMobile && scale !== 100);
   if (uiScaleInput) uiScaleInput.value = String(scale);
   if (uiScaleValue) uiScaleValue.textContent = `${scale}%`;
+  if (uiScaleLabel) uiScaleLabel.textContent = isMobile ? "牌桌缩放" : "页面缩放";
+  updateScaleControlBounds();
+}
+
+function updateScaleControlBounds() {
+  if (!uiScaleInput) return;
+  const { min, max } = scaleBounds();
+  uiScaleInput.min = String(min);
+  uiScaleInput.max = String(max);
+  uiScaleInput.step = "5";
 }
 
 function getSelectedPlayerCount() {
