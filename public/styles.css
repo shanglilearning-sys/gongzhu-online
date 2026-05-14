@@ -574,6 +574,75 @@ body.table-mode-active {
   bottom: clamp(132px, calc(150px * var(--ui-scale)), 178px);
 }
 
+.game-screen.table-mode .my-table-score-panel {
+  top: clamp(72px, calc(82px * var(--ui-scale)), 98px);
+  right: 12px;
+}
+
+.my-table-score-panel {
+  position: absolute;
+  z-index: 5;
+  top: 12px;
+  right: 12px;
+  width: min(218px, calc(100% - 24px));
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  align-items: center;
+  gap: 7px 10px;
+  border: 1px solid rgba(255, 238, 202, 0.22);
+  border-radius: 8px;
+  background: rgba(5, 19, 13, 0.74);
+  color: #fffaf0;
+  padding: 10px;
+  text-align: left;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(10px);
+}
+
+.my-table-score-panel strong {
+  color: #f5d985;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.my-score-title {
+  color: rgba(255, 250, 240, 0.76);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.my-score-cards {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-height: 58px;
+  overflow: hidden;
+}
+
+.my-score-card,
+.my-score-empty {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: rgba(255, 250, 240, 0.12);
+  color: rgba(255, 250, 240, 0.88);
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.my-score-card.red {
+  color: #ffd6db;
+}
+
+.my-score-empty {
+  color: rgba(255, 250, 240, 0.58);
+}
+
 .badge-title {
   margin-bottom: 7px;
   color: #f5d985;
@@ -1618,6 +1687,35 @@ body.table-mode-active {
     padding: 7px;
   }
 
+  .my-table-score-panel {
+    top: 9px;
+    right: 9px;
+    width: 136px;
+    min-height: 62px;
+    gap: 5px 7px;
+    padding: 7px;
+  }
+
+  .my-table-score-panel strong {
+    font-size: 18px;
+  }
+
+  .my-score-title {
+    font-size: 10px;
+  }
+
+  .my-score-cards {
+    gap: 4px;
+    max-height: 48px;
+  }
+
+  .my-score-card,
+  .my-score-empty {
+    min-height: 18px;
+    padding: 2px 5px;
+    font-size: 9.5px;
+  }
+
   .badge-title {
     margin-bottom: 5px;
   }
@@ -1685,6 +1783,12 @@ body.table-mode-active {
   .game-screen.table-mode .table-exposed-badge {
     bottom: clamp(116px, calc(130px * var(--ui-scale)), 154px);
     max-width: 170px;
+  }
+
+  .game-screen.table-mode .my-table-score-panel {
+    top: 56px;
+    right: 8px;
+    width: 132px;
   }
 
   .hand-panel {

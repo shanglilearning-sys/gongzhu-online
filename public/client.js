@@ -317,6 +317,7 @@ function render() {
   renderTopbar();
   renderScores();
   renderSlots();
+  renderMyTableScorePanel();
   renderTrick();
   renderHand();
   renderSidePanel();
@@ -383,6 +384,7 @@ function renderSlots() {
   const seats = orderedSeatsForView();
   playerSlots.innerHTML = "";
   seats.forEach((seat, index) => {
+    if (seat === state.me?.seat) return;
     const slot = document.createElement("div");
     slot.className = "player-slot";
     slot.dataset.viewIndex = String(index);
@@ -446,6 +448,34 @@ function renderTableExposedBadge() {
     </div>
   `;
   tableWrap.appendChild(badge);
+}
+
+function renderMyTableScorePanel() {
+  if (!tableWrap) return;
+  tableWrap.querySelector(".my-table-score-panel")?.remove();
+  const seat = state?.me?.seat;
+  const player = Number.isInteger(seat) ? state.players[seat] : null;
+  if (!player) return;
+  const score = currentRoundScore(seat);
+  const cards = [...(player.scoreCards || [])].sort(compareCards);
+  const cardItems = cards.length
+    ? cards.map((card) => `
+      <span class="my-score-card ${card.suit === "H" || card.suit === "D" ? "red" : "black"}">
+        ${escapeHtml(shortCardLabel(card.id))}
+      </span>
+    `).join("")
+    : `<span class="my-score-empty">暂无分牌</span>`;
+  const panel = document.createElement("button");
+  panel.type = "button";
+  panel.className = "my-table-score-panel";
+  panel.title = "查看自己的本轮分牌";
+  panel.innerHTML = `
+    <span class="my-score-title">我的本局</span>
+    <strong>${formatScore(score)}</strong>
+    <span class="my-score-cards">${cardItems}</span>
+  `;
+  panel.addEventListener("click", () => openScoreCards(seat));
+  tableWrap.appendChild(panel);
 }
 
 function renderTrick() {
@@ -827,9 +857,10 @@ function sendReaction(targetSeat, kind) {
 function showReaction(reaction) {
   const fromSlot = document.querySelector(`.player-slot[data-seat="${reaction?.fromSeat}"]`);
   const targetSlot = document.querySelector(`.player-slot[data-seat="${reaction?.targetSeat}"]`);
-  if (!fromSlot || !targetSlot || !reaction?.kind) return;
-  const fromPoint = slotAnchorPoint(fromSlot);
-  const targetPoint = slotAnchorPoint(targetSlot);
+  if (!reaction?.kind) return;
+  const fromPoint = fromSlot ? slotAnchorPoint(fromSlot) : seatAnchorPoint(reaction?.fromSeat);
+  const targetPoint = targetSlot ? slotAnchorPoint(targetSlot) : seatAnchorPoint(reaction?.targetSeat);
+  if (!fromPoint || !targetPoint) return;
   const startX = fromPoint.x;
   const startY = fromPoint.y;
   const endX = targetPoint.x;
@@ -848,6 +879,18 @@ function showReaction(reaction) {
   item.style.setProperty("--to-y", `${endY}px`);
   tableWrap.appendChild(item);
   setTimeout(() => item.remove(), 1150);
+}
+
+function seatAnchorPoint(seat) {
+  if (!Number.isInteger(seat)) return null;
+  const seats = orderedSeatsForView();
+  const index = seats.indexOf(seat);
+  if (index < 0) return null;
+  const point = slotPoint(index, seats.length);
+  return {
+    x: tableWrap.clientWidth * point.x / 100,
+    y: tableWrap.clientHeight * point.y / 100
+  };
 }
 
 function slotAnchorPoint(slot) {
