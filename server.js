@@ -159,6 +159,7 @@ function createGameServer(options = {}) {
       hostId: hostSocketId,
       hostClientId: clientId,
       round: null,
+      pigKingSeat: null,
       chats: [],
       messages: [],
       createdAt: Date.now()
@@ -580,6 +581,7 @@ function roomToSnapshot(room) {
     players: room.players.map(participantToSnapshot),
     spectators: room.spectators.map(participantToSnapshot),
     hostClientId: room.hostClientId,
+    pigKingSeat: Number.isInteger(room.pigKingSeat) ? room.pigKingSeat : null,
     round: room.round ? roundToSnapshot(room.round) : null,
     chats: room.chats || [],
     messages: room.messages || [],
@@ -601,6 +603,11 @@ function participantToSnapshot(participant) {
     connected: false,
     socketId: null
   };
+}
+
+function firstPigKingSeatForPlayers(players) {
+  const winner = players.find((player) => Math.max(0, Number.parseInt(player?.pigCount || 0, 10)) >= 3);
+  return Number.isInteger(winner?.seat) ? winner.seat : null;
 }
 
 function roundToSnapshot(round) {
@@ -657,6 +664,9 @@ function roomFromSnapshot(snapshot) {
     }
   }
   const hostClientId = snapshot.hostClientId || players[0].clientId;
+  const pigKingSeat = Number.isInteger(snapshot.pigKingSeat)
+    ? snapshot.pigKingSeat
+    : firstPigKingSeatForPlayers(players);
   return {
     code: String(snapshot.code).trim().toUpperCase(),
     phase: snapshot.phase || (round ? "playing" : "lobby"),
@@ -673,6 +683,7 @@ function roomFromSnapshot(snapshot) {
       : [],
     hostId: null,
     hostClientId,
+    pigKingSeat,
     round,
     chats: Array.isArray(snapshot.chats) ? snapshot.chats.slice(-80) : [],
     messages: Array.isArray(snapshot.messages) ? snapshot.messages.slice(-50) : [],
@@ -851,6 +862,7 @@ function createTestRoom(hostSocketId, hostName, hostClientId = hostSocketId, opt
     hostId: hostSocketId,
     hostClientId: clientId,
     round: null,
+    pigKingSeat: null,
     messages: [],
     chats: [],
     createdAt: Date.now()
@@ -948,6 +960,7 @@ function publicRoom(room) {
     playerCount,
     hostId: room.hostId,
     instanceId: INSTANCE_ID,
+    pigKingSeat: Number.isInteger(room.pigKingSeat) ? room.pigKingSeat : null,
     players: room.players.map((player) => ({
       socketId: player.socketId,
       name: player.name,
@@ -1072,6 +1085,9 @@ function startRound(room, options = {}) {
   room.players.forEach((player) => {
     if (!Number.isFinite(player.pigCount)) player.pigCount = 0;
   });
+  if (!Number.isInteger(room.pigKingSeat)) {
+    room.pigKingSeat = firstPigKingSeatForPlayers(room.players);
+  }
 
   const deck = shuffle(deckForPlayerCount(playerCount));
   const hands = Array.from({ length: playerCount }, () => []);
@@ -1272,6 +1288,9 @@ function finishRound(room) {
   round.phase = "finished";
   for (const seat of pigSeats) {
     room.players[seat].pigCount = (room.players[seat].pigCount || 0) + 1;
+    if (!Number.isInteger(room.pigKingSeat) && room.players[seat].pigCount >= 3) {
+      room.pigKingSeat = seat;
+    }
   }
   const pigNames = pigSeats.map((seat) => room.players[seat]?.name).filter(Boolean).join("、") || "无";
   pushRoundMessage(room, `本局结束：${scores.map((score, seat) => `${room.players[seat].name} ${formatScore(score)}`).join("，")}。本局当猪：${pigNames}。`);

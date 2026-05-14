@@ -530,13 +530,13 @@ function renderTopbar() {
 
 function renderScores() {
   scoreStrip.innerHTML = "";
+  const pigKingSeat = firstPigKingSeat();
   for (const seat of orderedSeatsForView()) {
     const player = state.players[seat];
     const currentScore = currentRoundScore(seat);
     const pigCount = Math.max(0, Number.parseInt(player?.pigCount || 0, 10));
-    const pigMarks = renderPigMarks(pigCount, { compact: true });
-    const pigTitle = pigCount > 3 ? `<span class="score-pig-title">猪王</span>` : "";
-    const pigText = player ? `当猪 ${pigCount} 局${pigTitle}` : "等待加入";
+    const isPigKing = seat === pigKingSeat;
+    const pigText = player ? `当猪 ${pigCount} 局${isPigKing ? "（@猪王）" : ""}` : "等待加入";
     const card = document.createElement("div");
     card.className = "score-card";
     if (state.round?.currentPlayer === seat) card.classList.add("active");
@@ -548,9 +548,8 @@ function renderScores() {
     }
     card.innerHTML = `
       <div class="name">
-        <span class="seat-badge">${player?.directionLabel || seat + 1}</span>
-        <span class="name-text">${escapeHtml(player?.name || `空位 ${seat + 1}`)}</span>
-        ${pigMarks}
+        <span class="seat-badge">${seatBadgeLabel(seat)}</span>
+        <span class="name-text">${escapeHtml(player?.name || `空位 ${seat + 1}`)}${isPigKing ? "（@猪王）" : ""}</span>
         <strong>${formatScore(currentScore)}</strong>
       </div>
       <div class="meta">${player ? `当前分数 ${formatScore(currentScore)} · ${pigText}` : "等待加入"}</div>
@@ -594,8 +593,8 @@ function renderSlots() {
     } : null;
     slot.innerHTML = `
       <div class="slot-top">
-        <span class="slot-seat">${player?.directionLabel || seat + 1}</span>
-        <span class="slot-name">${escapeHtml(player?.name || "空位")}</span>
+        <span class="slot-seat">${seatBadgeLabel(seat)}</span>
+        <span class="slot-name">${escapeHtml(player?.name || "空位")}${seat === firstPigKingSeat() ? "（@猪王）" : ""}</span>
       </div>
       <div class="slot-meta">${slotMeta}</div>
       ${player ? `
@@ -639,8 +638,8 @@ function renderSelfCornerSlot() {
   };
   slot.innerHTML = `
     <div class="slot-top">
-      <span class="slot-seat">${player.directionLabel || seat + 1}</span>
-      <span class="slot-name">${escapeHtml(player.name || "我")}</span>
+      <span class="slot-seat">${seatBadgeLabel(seat)}</span>
+      <span class="slot-name">${escapeHtml(player.name || "我")}${seat === firstPigKingSeat() ? "（@猪王）" : ""}</span>
     </div>
     <div class="slot-meta"><span>当前分数 ${formatScore(currentRoundScore(seat))}</span></div>
     ${player.connected === false ? `<div class="slot-alert">断线</div>` : ""}
@@ -911,15 +910,6 @@ function mobileSeatSpread() {
   return base + extra;
 }
 
-function renderPigMarks(count, options = {}) {
-  const safeCount = Math.max(0, Number.parseInt(count || 0, 10));
-  if (!safeCount) return "";
-  const visible = Math.min(safeCount, options.compact ? 3 : 5);
-  const marks = Array.from({ length: visible }, () => `<span aria-hidden="true">🐽</span>`).join("");
-  const extra = safeCount > visible ? `<em>+${safeCount - visible}</em>` : "";
-  return `<span class="pig-marks" title="当猪 ${safeCount} 局" aria-label="当猪 ${safeCount} 局">${marks}${extra}</span>`;
-}
-
 function getExposedItems() {
   const exposed = state?.round?.exposed;
   if (!exposed) return [];
@@ -928,6 +918,18 @@ function getExposedItems() {
     if (exposed[id] !== null && exposed[id] !== undefined) items.push({ id, seat: exposed[id] });
   }
   return items.sort((a, b) => compareCardIds(a.id, b.id));
+}
+
+function firstPigKingSeat() {
+  if (Number.isInteger(state?.pigKingSeat)) return state.pigKingSeat;
+  const players = state?.players || [];
+  const winner = players.find((player) => Math.max(0, Number.parseInt(player?.pigCount || 0, 10)) >= 3);
+  return Number.isInteger(winner?.seat) ? winner.seat : null;
+}
+
+function seatBadgeLabel(seat) {
+  if (seat === firstPigKingSeat()) return "🐷";
+  return seat + 1;
 }
 
 function makeCard(card, options = {}) {

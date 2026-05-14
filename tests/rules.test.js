@@ -27,6 +27,31 @@ function roundWithTaken(taken, exposed = {}) {
   };
 }
 
+function finishableRound(taken, overrides = {}) {
+  const playerCount = taken.length;
+  return {
+    handNumber: 1,
+    phase: "play",
+    playerCount,
+    hands: Array.from({ length: playerCount }, () => []),
+    taken,
+    exposed: { SQ: null, DJ: null, C10: null, HA: null },
+    protectedSuits: { S: false, H: false, D: false, C: false },
+    currentPlayer: 0,
+    starter: 0,
+    dealer: null,
+    trickLeadSuit: null,
+    trick: [],
+    pendingTrickResolution: null,
+    trickNumber: 14,
+    lastTrick: null,
+    heartsSeen: true,
+    scorePreview: Array.from({ length: playerCount }, () => 0),
+    finishedScores: null,
+    ...overrides
+  };
+}
+
 function testScoring() {
   assert.deepEqual(calculateScores(roundWithTaken([
     [card("SQ")],
@@ -153,30 +178,12 @@ function testPigCount() {
   room.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", pigCount: 0, connected: true });
   room.players.push({ socketId: "d", clientId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", pigCount: 0, connected: true });
   room.phase = "playing";
-  room.round = {
-    handNumber: 1,
-    phase: "play",
-    hands: [[], [], [], []],
-    taken: [
+  room.round = finishableRound([
       [card("DJ")],
       [card("SQ"), card("H5")],
       [card("H6")],
       [card("C10")]
-    ],
-    exposed: { SQ: null, DJ: null, C10: null, HA: null },
-    protectedSuits: { S: false, H: false, D: false, C: false },
-    currentPlayer: 0,
-    starter: 0,
-    dealer: null,
-    trickLeadSuit: null,
-    trick: [],
-    pendingTrickResolution: null,
-    trickNumber: 14,
-    lastTrick: null,
-    heartsSeen: true,
-    scorePreview: [0, 0, 0, 0],
-    finishedScores: null
-  };
+    ]);
 
   const before = room.players.map((player) => player.pigCount);
   finishRound(room);
@@ -184,6 +191,36 @@ function testPigCount() {
   assert.deepEqual(room.round.pigSeats, [1]);
   assert.deepEqual(room.players.map((player) => player.pigCount), [before[0], before[1] + 1, before[2], before[3]]);
   assert.equal(room.round.phase, "finished");
+}
+
+function testPigKingLocksFirstSeatToThree() {
+  const room = createRoom("a", "甲");
+  room.players.push({ socketId: "b", clientId: "b", name: "乙", seat: 1, direction: "east", directionLabel: "东", pigCount: 2, connected: true });
+  room.players.push({ socketId: "c", clientId: "c", name: "丙", seat: 2, direction: "north", directionLabel: "北", pigCount: 0, connected: true });
+  room.players.push({ socketId: "d", clientId: "d", name: "丁", seat: 3, direction: "west", directionLabel: "西", pigCount: 0, connected: true });
+  room.phase = "playing";
+  room.round = finishableRound([
+    [card("DJ")],
+    [card("SQ"), card("H5")],
+    [card("H6")],
+    [card("C10")]
+  ]);
+
+  finishRound(room);
+  assert.equal(room.players[1].pigCount, 3);
+  assert.equal(room.pigKingSeat, 1);
+
+  room.players[0].pigCount = 2;
+  room.round = finishableRound([
+    [card("SQ")],
+    [card("DJ")],
+    [card("C10")],
+    [card("H5")]
+  ], { handNumber: 2 });
+
+  finishRound(room);
+  assert.equal(room.players[0].pigCount, 3);
+  assert.equal(room.pigKingSeat, 1);
 }
 
 function testTiedLowestPigCount() {
@@ -205,6 +242,7 @@ testRoomFlow();
 testVariablePlayerCounts();
 testBloodLock();
 testPigCount();
+testPigKingLocksFirstSeatToThree();
 testTiedLowestPigCount();
 testAllHeartsMakesOthersPigs();
 console.log("rules ok");
