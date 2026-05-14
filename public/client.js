@@ -8,7 +8,8 @@ const SUIT_NAMES = { S: "黑桃", H: "红桃", D: "方块", C: "梅花" };
 const SPECIAL_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
 const CLIENT_ID_KEY = "gongzhuClientId";
-const UI_SCALE_KEY = "gongzhuUiScale";
+const UI_SCALE_KEY = "gongzhuPageZoom";
+const MOBILE_QUERY = window.matchMedia("(max-width: 640px), (pointer: coarse)");
 
 let state = null;
 let selectedExpose = new Set();
@@ -153,6 +154,12 @@ window.addEventListener("resize", () => {
 });
 
 screen.orientation?.addEventListener?.("change", () => {
+  updateTableModeAvailability();
+  renderSlots();
+});
+
+MOBILE_QUERY.addEventListener?.("change", () => {
+  updateTableModeAvailability();
   renderSlots();
 });
 
@@ -219,12 +226,14 @@ function getSavedUiScale() {
 function clampScale(value) {
   const numeric = Number.parseInt(value, 10);
   if (!Number.isFinite(numeric)) return 100;
-  return Math.min(112, Math.max(82, numeric));
+  return Math.min(120, Math.max(65, numeric));
 }
 
 function applyUiScale(value) {
   const scale = clampScale(value);
-  document.documentElement.style.setProperty("--ui-scale", String(scale / 100));
+  document.documentElement.style.setProperty("--ui-scale", "1");
+  document.documentElement.style.setProperty("--page-zoom", String(scale / 100));
+  document.body.classList.toggle("page-zoom-active", scale !== 100);
   if (uiScaleInput) uiScaleInput.value = String(scale);
   if (uiScaleValue) uiScaleValue.textContent = `${scale}%`;
 }
@@ -263,6 +272,7 @@ function emitAction(event, payload, afterOk) {
 
 function render() {
   if (!state) return;
+  updateTableModeAvailability();
   const phase = state.round?.phase || state.phase || "lobby";
   const myTurn = phase === "play" && state.me?.seat === state.round?.currentPlayer;
   game.dataset.phase = phase;
@@ -559,29 +569,24 @@ function seatAngle(relative) {
 }
 
 function slotPoint(index, count) {
-  const isCompactScreen = window.innerWidth <= 640 || window.innerHeight <= 520;
-  const seatMaps = {
-    3: {
-      desktop: [{ x: 50, y: 86 }, { x: 84, y: 42 }, { x: 16, y: 42 }],
-      mobile: [{ x: 50, y: 84 }, { x: 76, y: 42 }, { x: 24, y: 42 }],
-      table: [{ x: 50, y: 82 }, { x: 84, y: 40 }, { x: 16, y: 40 }],
-      tableCompact: [{ x: 50, y: 76 }, { x: 78, y: 42 }, { x: 22, y: 42 }]
-    },
-    4: {
-      desktop: [{ x: 50, y: 86 }, { x: 84, y: 50 }, { x: 50, y: 14 }, { x: 16, y: 50 }],
-      mobile: [{ x: 50, y: 84 }, { x: 76, y: 50 }, { x: 50, y: 16 }, { x: 24, y: 50 }],
-      table: [{ x: 50, y: 82 }, { x: 84, y: 50 }, { x: 50, y: 14 }, { x: 16, y: 50 }],
-      tableCompact: [{ x: 50, y: 76 }, { x: 78, y: 50 }, { x: 50, y: 20 }, { x: 22, y: 50 }]
-    },
-    5: {
-      desktop: [{ x: 50, y: 86 }, { x: 84, y: 63 }, { x: 72, y: 15 }, { x: 28, y: 15 }, { x: 16, y: 63 }],
-      mobile: [{ x: 50, y: 84 }, { x: 76, y: 63 }, { x: 70, y: 18 }, { x: 30, y: 18 }, { x: 24, y: 63 }],
-      table: [{ x: 50, y: 82 }, { x: 84, y: 63 }, { x: 72, y: 15 }, { x: 28, y: 15 }, { x: 16, y: 63 }],
-      tableCompact: [{ x: 50, y: 76 }, { x: 78, y: 62 }, { x: 70, y: 22 }, { x: 30, y: 22 }, { x: 22, y: 62 }]
-    }
+  if (tableModeEnabled && index === 0) {
+    return { x: 50, y: window.innerWidth <= 640 ? 78 : 82 };
+  }
+  const angle = (Math.PI / 2) + (Math.PI * 2 * index / count);
+  const xRadius = count === 5 ? 43 : 41;
+  const yRadius = tableModeEnabled ? 43 : (index === 0 ? 37 : 39);
+  const mobileSeatMaps = {
+    3: [{ x: 50, y: 84 }, { x: 76, y: 42 }, { x: 24, y: 42 }],
+    4: [{ x: 50, y: 84 }, { x: 76, y: 50 }, { x: 50, y: 16 }, { x: 24, y: 50 }],
+    5: [{ x: 50, y: 84 }, { x: 76, y: 63 }, { x: 70, y: 18 }, { x: 30, y: 18 }, { x: 24, y: 63 }]
   };
-  const mode = tableModeEnabled ? (isCompactScreen ? "tableCompact" : "table") : (isCompactScreen ? "mobile" : "desktop");
-  return seatMaps[count]?.[mode]?.[index] || { x: 50, y: 50 };
+  if (MOBILE_QUERY.matches && mobileSeatMaps[count]?.[index]) {
+    return mobileSeatMaps[count][index];
+  }
+  return {
+    x: 50 + Math.cos(angle) * xRadius,
+    y: 50 + Math.sin(angle) * yRadius
+  };
 }
 
 function renderPigMarks(count, options = {}) {
@@ -687,6 +692,10 @@ function roundSummary() {
 }
 
 async function toggleTableMode() {
+  if (MOBILE_QUERY.matches) {
+    statusLine.textContent = "手机版已关闭全屏桌面，横屏后用页面缩放调整视野。";
+    return;
+  }
   if (tableModeEnabled) {
     if (document.fullscreenElement) {
       await document.exitFullscreen().catch(() => {});
@@ -713,6 +722,15 @@ function setTableMode(enabled) {
     try {
       screen.orientation?.unlock?.();
     } catch {}
+  }
+}
+
+function updateTableModeAvailability() {
+  const isMobile = MOBILE_QUERY.matches;
+  tableModeButton.classList.toggle("mobile-hidden", isMobile);
+  tableModeButton.disabled = isMobile;
+  if (isMobile && tableModeEnabled) {
+    setTableMode(false);
   }
 }
 

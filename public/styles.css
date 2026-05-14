@@ -18,6 +18,7 @@
   --green: #2dd186;
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.32);
   --ui-scale: 1;
+  --page-zoom: 1;
   --card-w: calc(70px * var(--ui-scale));
   --card-h: calc(100px * var(--ui-scale));
   --small-card-w: calc(58px * var(--ui-scale));
@@ -39,6 +40,7 @@ html {
 body {
   margin: 0;
   min-height: 100svh;
+  overflow-x: auto;
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px) 0 0 / 34px 34px,
     linear-gradient(180deg, #20231b 0%, #11160f 46%, #0d100c 100%);
@@ -83,6 +85,10 @@ button.secondary {
 
 button.secondary:hover {
   background: rgba(255, 250, 240, 0.16);
+}
+
+button.mobile-hidden {
+  display: none !important;
 }
 
 button.join-submit {
@@ -231,6 +237,18 @@ select:focus {
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px) 0 0 / 34px 34px,
     linear-gradient(180deg, #1b2118 0%, #10150f 100%);
+}
+
+body.page-zoom-active:not(.table-mode-active) .game-screen:not(.hidden) {
+  width: calc(100vw / var(--page-zoom));
+  min-width: calc(100vw / var(--page-zoom));
+  min-height: calc(100svh / var(--page-zoom));
+  transform: scale(var(--page-zoom));
+  transform-origin: top left;
+}
+
+body.page-zoom-active:not(.table-mode-active) {
+  min-height: calc(100svh / var(--page-zoom));
 }
 
 body.table-mode-active {
@@ -1558,7 +1576,7 @@ body.table-mode-active {
   }
 
   .player-slot {
-    width: clamp(112px, calc(124px * var(--ui-scale)), 138px);
+    width: clamp(124px, calc(134px * var(--ui-scale)), 148px);
     min-height: calc(74px * var(--ui-scale));
     padding: calc(7px * var(--ui-scale));
     gap: 3px;
@@ -1632,7 +1650,7 @@ body.table-mode-active {
   }
 
   .game-screen.table-mode .player-slot {
-    width: clamp(108px, calc(118px * var(--ui-scale)), 130px);
+    width: clamp(112px, calc(124px * var(--ui-scale)), 138px);
   }
 
   .game-screen.table-mode .table-exposed-badge {
