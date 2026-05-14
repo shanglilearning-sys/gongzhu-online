@@ -259,7 +259,11 @@ async function testFullGameFlow() {
     assert.equal(sawSettlingTrick, true);
     assert.equal(clients[0].state.players.every((player) => player.handCount === 0), true);
     assert.equal(clients[0].state.round.finishedScores.length, 4);
-    assert.equal(clients[0].state.players.reduce((sum, player) => sum + player.pigCount, 0), 1);
+    assert.ok(clients[0].state.round.pigSeats.length >= 1);
+    assert.equal(
+      clients[0].state.players.reduce((sum, player) => sum + player.pigCount, 0),
+      clients[0].state.round.pigSeats.length
+    );
     assert.equal(clients[0].state.players.every((player) => player.totalScore === undefined), true);
     const publicScoreCardIds = clients[0].state.players.flatMap((player) => player.scoreCards.map((card) => card.id));
     for (const id of ["SQ", "DJ", "C10", "H5", "HA"]) {

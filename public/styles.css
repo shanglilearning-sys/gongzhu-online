@@ -314,7 +314,7 @@ input:focus {
 
 .score-card .name {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   font-weight: 900;
@@ -345,6 +345,38 @@ input:focus {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.pig-marks {
+  max-width: 76px;
+  min-width: 0;
+  min-height: 23px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1px;
+  border: 1px solid rgba(255, 182, 193, 0.32);
+  border-radius: 999px;
+  background: rgba(255, 222, 226, 0.12);
+  padding: 1px 6px;
+  color: #ffd3dc;
+  font-size: 14px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 250, 240, 0.04);
+}
+
+.pig-marks span {
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.34));
+}
+
+.pig-marks em {
+  color: #ffe9a8;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 950;
+  line-height: 1;
 }
 
 .score-detail-head {
@@ -518,22 +550,22 @@ input:focus {
   animation: trickPop 320ms cubic-bezier(0.2, 0.9, 0.28, 1.2);
 }
 
-.played-card[data-pos="0"] {
+.played-card[data-pos="south"] {
   left: 50%;
   top: 78%;
 }
 
-.played-card[data-pos="1"] {
+.played-card[data-pos="east"] {
   left: 78%;
   top: 50%;
 }
 
-.played-card[data-pos="2"] {
+.played-card[data-pos="north"] {
   left: 50%;
   top: 22%;
 }
 
-.played-card[data-pos="3"] {
+.played-card[data-pos="west"] {
   left: 22%;
   top: 50%;
 }
@@ -651,7 +683,7 @@ input:focus {
 
 .slot-top {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 7px;
 }
@@ -1314,6 +1346,17 @@ input:focus {
     padding: 8px;
   }
 
+  .score-card .name {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .score-card .name .pig-marks {
+    grid-column: 2 / 4;
+    grid-row: 2;
+    max-width: 100%;
+    width: fit-content;
+  }
+
   .seat-badge {
     width: 23px;
     height: 23px;
@@ -1340,11 +1383,11 @@ input:focus {
     min-height: calc(198px * var(--ui-scale));
   }
 
-  .played-card[data-pos="1"] {
+  .played-card[data-pos="east"] {
     left: 82%;
   }
 
-  .played-card[data-pos="3"] {
+  .played-card[data-pos="west"] {
     left: 18%;
   }
 
@@ -1418,6 +1461,12 @@ input:focus {
 
   .slot-name {
     font-size: 13px;
+  }
+
+  .slot-top .pig-marks {
+    grid-column: 1 / -1;
+    max-width: 100%;
+    width: fit-content;
   }
 
   .slot-meta,

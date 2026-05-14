@@ -7,7 +7,8 @@ const {
   createRoom,
   finishExpose,
   exposeCards,
-  finishRound
+  finishRound,
+  getRoundPigSeats
 } = require("../server");
 
 function card(id) {
@@ -135,7 +136,12 @@ function testPigCount() {
     handNumber: 1,
     phase: "play",
     hands: [[], [], [], []],
-    taken: [[card("SQ")], [], [], []],
+    taken: [
+      [card("DJ")],
+      [card("SQ"), card("H5")],
+      [card("H6")],
+      [card("C10")]
+    ],
     exposed: { SQ: null, DJ: null, C10: null, HA: null },
     protectedSuits: { S: false, H: false, D: false, C: false },
     currentPlayer: 0,
@@ -151,14 +157,32 @@ function testPigCount() {
     finishedScores: null
   };
 
-  const before = room.players[0].pigCount;
+  const before = room.players.map((player) => player.pigCount);
   finishRound(room);
-  assert.equal(room.players[0].pigCount, before + 1);
+  assert.deepEqual(room.round.finishedScores, [100, -110, -10, 50]);
+  assert.deepEqual(room.round.pigSeats, [1]);
+  assert.deepEqual(room.players.map((player) => player.pigCount), [before[0], before[1] + 1, before[2], before[3]]);
   assert.equal(room.round.phase, "finished");
+}
+
+function testTiedLowestPigCount() {
+  assert.deepEqual(getRoundPigSeats({ taken: [[], [], [], []] }, [-20, 30, -20, 10]), [0, 2]);
+}
+
+function testAllHeartsMakesOthersPigs() {
+  const taken = [
+    ["H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9", "H10", "HJ", "HQ", "HK", "HA"].map(card),
+    [card("SQ")],
+    [card("DJ")],
+    [card("C10")]
+  ];
+  assert.deepEqual(getRoundPigSeats({ taken }, [200, -100, 100, 50]), [1, 2, 3]);
 }
 
 testScoring();
 testRoomFlow();
 testBloodLock();
 testPigCount();
+testTiedLowestPigCount();
+testAllHeartsMakesOthersPigs();
 console.log("rules ok");

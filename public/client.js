@@ -7,6 +7,7 @@ const SUIT_SYMBOLS = { S: "♠", H: "♥", D: "♦", C: "♣" };
 const SUIT_NAMES = { S: "黑桃", H: "红桃", D: "方块", C: "梅花" };
 const SPECIAL_NAMES = { SQ: "猪", DJ: "羊", C10: "变压器", HA: "红桃A" };
 const RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
+const VIEW_POSITIONS = ["south", "east", "north", "west"];
 const CLIENT_ID_KEY = "gongzhuClientId";
 const UI_SCALE_KEY = "gongzhuUiScale";
 
@@ -308,9 +309,10 @@ function renderTopbar() {
 
 function renderScores() {
   scoreStrip.innerHTML = "";
-  for (let seat = 0; seat < 4; seat += 1) {
+  for (const seat of orderedSeatsForView()) {
     const player = state.players[seat];
     const currentScore = currentRoundScore(seat);
+    const pigMarks = renderPigMarks(player?.pigCount || 0, { compact: true });
     const card = document.createElement("div");
     card.className = "score-card";
     if (state.round?.currentPlayer === seat) card.classList.add("active");
@@ -324,6 +326,7 @@ function renderScores() {
       <div class="name">
         <span class="seat-badge">${player?.directionLabel || seat + 1}</span>
         <span class="name-text">${escapeHtml(player?.name || `空位 ${seat + 1}`)}</span>
+        ${pigMarks}
         <strong>${formatScore(currentScore)}</strong>
       </div>
       <div class="meta">${player ? `本轮 ${formatScore(currentScore)} · 当猪 ${player.pigCount || 0} 局 · 手牌 ${player.handCount || 0}` : "等待加入"}</div>
@@ -334,10 +337,14 @@ function renderScores() {
 
 function renderSlots() {
   renderTableExposedBadge();
+  const seatByPosition = seatsByViewPosition();
   document.querySelectorAll(".player-slot").forEach((slot) => {
-    const seat = Number(slot.dataset.seat);
+    const seat = Number.isInteger(seatByPosition[slot.dataset.viewPos])
+      ? seatByPosition[slot.dataset.viewPos]
+      : Number(slot.dataset.seat || 0);
     const player = state.players[seat];
     const currentScore = currentRoundScore(seat);
+    slot.dataset.seat = String(seat);
     slot.classList.toggle("current", state.round?.currentPlayer === seat);
     slot.classList.toggle("me", state.me?.seat === seat);
     slot.classList.toggle("offline", player?.connected === false);
@@ -353,8 +360,9 @@ function renderSlots() {
     } : null;
     slot.innerHTML = `
       <div class="slot-top">
-        <span class="slot-seat">${player?.directionLabel || ""}</span>
+        <span class="slot-seat">${player?.directionLabel || seat + 1}</span>
         <span class="slot-name">${escapeHtml(player?.name || "空位")}</span>
+        ${renderPigMarks(player?.pigCount || 0)}
       </div>
       <div class="slot-meta">${player ? `${formatScore(currentScore)} · 猪 ${player.pigCount || 0} · 手牌 ${player.handCount}` : "等待加入"}</div>
       ${player?.connected === false ? `<div class="slot-alert">断线</div>` : ""}
@@ -384,8 +392,8 @@ function renderTrick() {
   for (const play of trick) {
     const wrapper = document.createElement("div");
     wrapper.className = "played-card";
-    wrapper.dataset.pos = play.seat;
-    wrapper.style.setProperty("--seat", play.seat);
+    wrapper.dataset.pos = viewPositionForSeat(play.seat);
+    wrapper.style.setProperty("--seat", relativeSeat(play.seat));
     wrapper.appendChild(makeCard(play.card, { small: true, disabled: true, exposed: play.exposed }));
     trickArea.appendChild(wrapper);
   }
@@ -456,7 +464,7 @@ function renderSidePanel() {
   renderExposed();
   scorePreview.innerHTML = "";
   const preview = state.round?.scorePreview || [0, 0, 0, 0];
-  for (let seat = 0; seat < 4; seat += 1) {
+  for (const seat of orderedSeatsForView()) {
     const row = document.createElement("div");
     row.className = "mini-row";
     row.innerHTML = `<span>${escapeHtml(state.players[seat]?.name || `空位 ${seat + 1}`)}</span><strong>${formatScore(preview[seat] || 0)}</strong>`;
@@ -510,6 +518,34 @@ function renderExposed() {
     pill.textContent = `${formatCardId(item.id)} · ${state.players[item.seat]?.name || ""}`;
     exposedList.appendChild(pill);
   }
+}
+
+function orderedSeatsForView() {
+  const baseSeat = Number.isInteger(state?.me?.seat) ? state.me.seat : 0;
+  return [0, 1, 2, 3].map((offset) => (baseSeat + offset) % 4);
+}
+
+function seatsByViewPosition() {
+  const seats = orderedSeatsForView();
+  return Object.fromEntries(VIEW_POSITIONS.map((position, index) => [position, seats[index]]));
+}
+
+function relativeSeat(seat) {
+  const baseSeat = Number.isInteger(state?.me?.seat) ? state.me.seat : 0;
+  return ((seat - baseSeat) + 4) % 4;
+}
+
+function viewPositionForSeat(seat) {
+  return VIEW_POSITIONS[relativeSeat(seat)] || "south";
+}
+
+function renderPigMarks(count, options = {}) {
+  const safeCount = Math.max(0, Number.parseInt(count || 0, 10));
+  if (!safeCount) return "";
+  const visible = Math.min(safeCount, options.compact ? 3 : 5);
+  const marks = Array.from({ length: visible }, () => `<span aria-hidden="true">🐽</span>`).join("");
+  const extra = safeCount > visible ? `<em>+${safeCount - visible}</em>` : "";
+  return `<span class="pig-marks" title="当猪 ${safeCount} 局" aria-label="当猪 ${safeCount} 局">${marks}${extra}</span>`;
 }
 
 function getExposedItems() {
@@ -574,9 +610,14 @@ function currentRoundScore(seat) {
 function roundSummary() {
   const scores = state?.round?.finishedScores;
   if (!scores) return "查看历史";
-  return scores
+  const scoreText = scores
     .map((score, seat) => `${state.players[seat]?.name || seat + 1} ${formatScore(score)}`)
     .join(" / ");
+  const pigSeats = state?.round?.pigSeats || [];
+  const pigText = pigSeats.length
+    ? ` · 本局猪 ${pigSeats.map((seat) => state.players[seat]?.name || seat + 1).join("、")}`
+    : "";
+  return `${scoreText}${pigText}`;
 }
 
 function openScoreCards(seat) {
@@ -640,8 +681,9 @@ function openRules() {
       <div><strong>卖牌</strong><span>开局可卖猪、羊、变压器、红桃 A。卖过的牌分值翻倍或变压器翻四倍。</span></div>
       <div><strong>首出</strong><span>持黑桃 2 的玩家首出，第一墩必须先出黑桃 2。</span></div>
       <div><strong>跟牌</strong><span>必须跟首出花色，没有该花色时可以垫任意牌。</span></div>
-      <div><strong>分牌</strong><span>猪 -100，羊 +100，红桃 5-A 为负分，变压器单收 +50。</span></div>
+      <div><strong>分牌</strong><span>黑桃 Q -100，羊 +100，红桃 5-A 为负分，变压器单收 +50。</span></div>
       <div><strong>全红</strong><span>收齐全部红桃转为 +200；红桃 A 被卖后为 +400。</span></div>
+      <div><strong>当猪</strong><span>每局最终分数最低者当猪；并列最低一起当猪；有人收全红时，其余三人当猪。</span></div>
       <div><strong>聊天语音</strong><span>先开听筒才能听别人，开麦克风才会把自己的声音发出去。手机端首次开启听筒用于解锁播放。</span></div>
       <div><strong>嘉铭赞助</strong><span>本桌由嘉铭冠名赞助，输赢各凭牌技。</span></div>
     </div>

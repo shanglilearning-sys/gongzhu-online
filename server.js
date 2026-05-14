@@ -599,6 +599,7 @@ function roundToSnapshot(round) {
       exposed: Boolean(play.exposed)
     }))
   } : null;
+  snapshot.pigSeats = Array.isArray(round.pigSeats) ? round.pigSeats.slice(0, 4) : [];
   return snapshot;
 }
 
@@ -710,7 +711,8 @@ function roundFromSnapshot(snapshot) {
     } : null,
     heartsSeen: Boolean(snapshot.heartsSeen),
     scorePreview: Array.isArray(snapshot.scorePreview) ? snapshot.scorePreview.slice(0, 4) : [0, 0, 0, 0],
-    finishedScores: Array.isArray(snapshot.finishedScores) ? snapshot.finishedScores.slice(0, 4) : null
+    finishedScores: Array.isArray(snapshot.finishedScores) ? snapshot.finishedScores.slice(0, 4) : null,
+    pigSeats: Array.isArray(snapshot.pigSeats) ? snapshot.pigSeats.filter((seat) => Number.isInteger(seat)).slice(0, 4) : []
   };
   while (round.hands.length < 4) round.hands.push([]);
   while (round.taken.length < 4) round.taken.push([]);
@@ -917,7 +919,8 @@ function publicRound(round) {
     trickNumber: round.trickNumber,
     lastTrick: round.lastTrick,
     scorePreview: round.scorePreview,
-    finishedScores: round.finishedScores
+    finishedScores: round.finishedScores,
+    pigSeats: round.pigSeats || []
   };
 }
 
@@ -1148,14 +1151,33 @@ function finishTrick(room) {
 function finishRound(room) {
   const round = room.round;
   const scores = calculateScores(round);
+  const pigSeats = getRoundPigSeats(round, scores);
   round.scorePreview = scores;
   round.finishedScores = scores;
+  round.pigSeats = pigSeats;
   round.phase = "finished";
-  const pigSeat = round.taken.findIndex((cards) => cards.some((card) => card.id === "SQ"));
-  if (pigSeat >= 0) {
-    room.players[pigSeat].pigCount = (room.players[pigSeat].pigCount || 0) + 1;
+  for (const seat of pigSeats) {
+    room.players[seat].pigCount = (room.players[seat].pigCount || 0) + 1;
   }
-  pushMessage(room, `本局结束：${scores.map((score, seat) => `${room.players[seat].name} ${formatScore(score)}`).join("，")}。`);
+  const pigNames = pigSeats.map((seat) => room.players[seat]?.name).filter(Boolean).join("、") || "无";
+  pushMessage(room, `本局结束：${scores.map((score, seat) => `${room.players[seat].name} ${formatScore(score)}`).join("，")}。本局当猪：${pigNames}。`);
+}
+
+function getRoundPigSeats(round, scores = calculateScores(round)) {
+  const allHeartsSeat = round.taken.findIndex(hasAllHearts);
+  if (allHeartsSeat >= 0) {
+    return [0, 1, 2, 3].filter((seat) => seat !== allHeartsSeat);
+  }
+  const lowest = Math.min(...scores);
+  return scores
+    .map((score, seat) => ({ score, seat }))
+    .filter((item) => item.score === lowest)
+    .map((item) => item.seat);
+}
+
+function hasAllHearts(cards) {
+  const ids = new Set(cards.map((card) => card.id));
+  return RANKS.every((rank) => ids.has(`H${rank}`));
 }
 
 function scoringCardsFor(cards) {
@@ -1304,5 +1326,6 @@ module.exports = {
   createGameServer,
   addPlayerToRoom,
   makeDeck,
-  createRoomPersistence
+  createRoomPersistence,
+  getRoundPigSeats
 };
