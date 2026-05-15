@@ -854,7 +854,7 @@ function renderHand() {
   const legal = new Set(state.legalPlays || []);
   const exposable = new Set(state.canExpose || []);
   const phase = state.round?.phase;
-  const hand = sortHandForUse(state.hand || [], legal, exposable, phase);
+  const hand = sortHandForUse(state.hand || []);
   handTitle.textContent = state.me ? `${state.me.directionLabel}家 · ${hand.length} 张` : "旁观中";
 
   const exposeDone = isMyExposeDone();
@@ -918,7 +918,7 @@ function renderSpectatorHands() {
   }
   for (const seat of orderedSeatsForView()) {
     const player = state.players[seat];
-    const cards = sortHandForUse(allHands[seat] || [], new Set(), new Set(), phase);
+    const cards = sortHandForUse(allHands[seat] || []);
     const group = document.createElement("section");
     group.className = "spectator-hand-group";
     if (state.round?.currentPlayer === seat) group.classList.add("active");
@@ -1197,18 +1197,8 @@ function currentRoundScore(seat) {
   return state?.round?.scorePreview?.[seat] ?? state?.round?.finishedScores?.[seat] ?? 0;
 }
 
-function sortHandForUse(hand, legal, exposable, phase) {
-  return [...hand].sort((a, b) => {
-    const aPriority = cardUsePriority(a, legal, exposable, phase);
-    const bPriority = cardUsePriority(b, legal, exposable, phase);
-    return aPriority - bPriority || compareCards(a, b);
-  });
-}
-
-function cardUsePriority(card, legal, exposable, phase) {
-  if (phase === "play" && legal.has(card.id)) return 0;
-  if (phase === "expose" && exposable.has(card.id)) return 0;
-  return 1;
+function sortHandForUse(hand) {
+  return [...hand].sort(compareCards);
 }
 
 function roundSummary() {
