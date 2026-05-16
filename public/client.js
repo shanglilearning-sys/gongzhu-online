@@ -14,6 +14,7 @@ const MOBILE_PAGE_ZOOM_KEY = "gongzhuMobilePageZoomV1";
 const TABLE_SIZE_KEY = "gongzhuTableSizeV1";
 const TABLE_THEME_KEY = "gongzhuTableThemeV1";
 const REDUCED_MOTION_KEY = "gongzhuReducedMotionV1";
+const BGM_SRC = "/audio/bgm.m4a";
 const MOBILE_QUERY = window.matchMedia("(max-width: 640px), (pointer: coarse)");
 const TABLE_THEMES = new Set(["classic", "star", "plum", "bamboo"]);
 
@@ -37,6 +38,7 @@ const newRoundButton = document.querySelector("#new-round-button");
 const copyLinkButton = document.querySelector("#copy-link");
 const historyButton = document.querySelector("#history-button");
 const rulesButton = document.querySelector("#rules-button");
+const audioToggleButton = document.querySelector("#audio-toggle-button");
 const tableModeButton = document.querySelector("#table-mode-button");
 const surrenderButton = document.querySelector("#surrender-button");
 const pageSettingsButton = document.querySelector("#page-settings-button");
@@ -74,6 +76,10 @@ const chatInput = document.querySelector("#chat-input");
 
 let resumeInFlight = false;
 let tableModeEnabled = false;
+const bgmAudio = new Audio(BGM_SRC);
+bgmAudio.loop = true;
+bgmAudio.preload = "auto";
+bgmAudio.volume = 0.55;
 
 const params = new URLSearchParams(window.location.search);
 if (params.get("room")) {
@@ -153,6 +159,10 @@ historyButton.addEventListener("click", () => {
 rulesButton.addEventListener("click", () => {
   openRules();
 });
+
+audioToggleButton?.addEventListener("click", toggleBgm);
+bgmAudio.addEventListener("play", () => setBgmButtonState(true));
+bgmAudio.addEventListener("pause", () => setBgmButtonState(false));
 
 pageSettingsButton?.addEventListener("click", (event) => {
   event.stopPropagation();
@@ -1195,6 +1205,29 @@ function formatScore(score) {
 
 function currentRoundScore(seat) {
   return state?.round?.scorePreview?.[seat] ?? state?.round?.finishedScores?.[seat] ?? 0;
+}
+
+async function toggleBgm() {
+  if (!bgmAudio.paused) {
+    bgmAudio.pause();
+    return;
+  }
+
+  try {
+    await bgmAudio.play();
+  } catch {
+    setBgmButtonState(false);
+    if (statusLine) {
+      statusLine.textContent = "音频未能播放，请再点一次或检查浏览器声音权限。";
+    }
+  }
+}
+
+function setBgmButtonState(isPlaying) {
+  if (!audioToggleButton) return;
+  audioToggleButton.classList.toggle("audio-on", isPlaying);
+  audioToggleButton.textContent = isPlaying ? "关闭音频" : "音频播放";
+  audioToggleButton.setAttribute("aria-pressed", isPlaying ? "true" : "false");
 }
 
 function sortHandForUse(hand) {

@@ -89,6 +89,12 @@ button.secondary:hover {
   background: rgba(255, 250, 240, 0.16);
 }
 
+button.audio-on {
+  border-color: rgba(245, 217, 133, 0.62);
+  background: linear-gradient(180deg, rgba(245, 217, 133, 0.32), rgba(130, 94, 33, 0.24));
+  color: #ffecc1;
+}
+
 button.danger {
   border-color: rgba(255, 141, 154, 0.42);
   background: rgba(142, 29, 44, 0.32);
