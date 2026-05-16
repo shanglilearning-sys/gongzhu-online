@@ -76,9 +76,11 @@ const chatInput = document.querySelector("#chat-input");
 
 let resumeInFlight = false;
 let tableModeEnabled = false;
+let bgmAutoResume = true;
 const bgmAudio = new Audio(BGM_SRC);
 bgmAudio.loop = true;
 bgmAudio.preload = "auto";
+bgmAudio.autoplay = true;
 bgmAudio.volume = 0.55;
 
 const params = new URLSearchParams(window.location.search);
@@ -163,6 +165,7 @@ rulesButton.addEventListener("click", () => {
 audioToggleButton?.addEventListener("click", toggleBgm);
 bgmAudio.addEventListener("play", () => setBgmButtonState(true));
 bgmAudio.addEventListener("pause", () => setBgmButtonState(false));
+requestBgmAutoplay();
 
 pageSettingsButton?.addEventListener("click", (event) => {
   event.stopPropagation();
@@ -1209,17 +1212,51 @@ function currentRoundScore(seat) {
 
 async function toggleBgm() {
   if (!bgmAudio.paused) {
+    bgmAutoResume = false;
     bgmAudio.pause();
     return;
   }
 
-  try {
-    await bgmAudio.play();
-  } catch {
+  bgmAutoResume = true;
+  const played = await playBgm();
+  if (!played) {
     setBgmButtonState(false);
     if (statusLine) {
       statusLine.textContent = "音频未能播放，请再点一次或检查浏览器声音权限。";
     }
+  }
+}
+
+function requestBgmAutoplay() {
+  playBgm();
+  for (const eventName of ["pointerdown", "keydown", "touchstart"]) {
+    window.addEventListener(eventName, resumeBgmAfterGesture, { passive: true });
+  }
+}
+
+async function resumeBgmAfterGesture(event) {
+  if (event?.target?.closest?.("#audio-toggle-button")) return;
+  if (!bgmAutoResume || !bgmAudio.paused) {
+    removeBgmGestureListeners();
+    return;
+  }
+  const played = await playBgm();
+  if (played) removeBgmGestureListeners();
+}
+
+function removeBgmGestureListeners() {
+  for (const eventName of ["pointerdown", "keydown", "touchstart"]) {
+    window.removeEventListener(eventName, resumeBgmAfterGesture);
+  }
+}
+
+async function playBgm() {
+  try {
+    await bgmAudio.play();
+    return true;
+  } catch {
+    setBgmButtonState(false);
+    return false;
   }
 }
 
